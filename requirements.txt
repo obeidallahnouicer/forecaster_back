@@ -8,3 +8,15 @@ openpyxl
 statsmodels
 plotly
 prophet
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+langchain
+openai
+faiss-cpu
+chromadb
+huggingface-hub
+sentence-transformers
+langchain_groq
+tiktoken

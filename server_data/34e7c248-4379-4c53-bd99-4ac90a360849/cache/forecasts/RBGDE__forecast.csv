@@ -1,0 +1,2 @@
+ref_article,designation,marque,famille,next_year,sma_forecast,es_forecast,lr_forecast,arima_forecast,prophet_forecast,xgb_forecast,avg_forecast,historical_years,historical_values,avg_sales,max_sales,min_sales,std_sales,trend_pct,data_points
+RBGDE,RB GEL DOUCHE ENERGISANT 250ML-6192488205887,RENEE BLANCHE,MASS MARKET,2026,,,4124.471499999985,,,,4124.471499999985,"[2022, 2023, 2024, 2025]","[10614.579, 12705.847, 4196.536, 7333.493]",8712.61375,12705.847,4196.536,3234.9774299150354,-30.911127045170605,4

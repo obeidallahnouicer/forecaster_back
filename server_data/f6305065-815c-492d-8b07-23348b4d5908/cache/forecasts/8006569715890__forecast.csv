@@ -1,0 +1,2 @@
+ref_article,designation,marque,famille,next_year,sma_forecast,es_forecast,lr_forecast,arima_forecast,prophet_forecast,xgb_forecast,avg_forecast,historical_years,historical_values,avg_sales,max_sales,min_sales,std_sales,trend_pct,data_points
+8006569715890,TEINT IALO 5.5 100ML,H. ZONE,IALO,2026,1790.469,,,,,,1790.469,"[2020, 2021, 2022, 2023, 2024, 2025]","[866.359, 2340.221, 2247.304, 498.862, 2371.937, 2500.608]",1804.2151666666668,2500.608,498.862,803.5776362653489,188.63415743358127,6
