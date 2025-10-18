@@ -24,37 +24,73 @@ def load_and_preprocess(path: Path = None) -> pd.DataFrame:
     This function will try common delimiters (comma, semicolon) and fall back to
     automatic detection with the python engine if necessary.
     """
-    p = path or config.DATA_PATH
-    # Try a few common separators to be robust against different CSV exports
-    tried = []
-    df = None
-    encodings = ["utf-8", "latin-1"]
-    for enc in encodings:
-        try:
-            tried.append((",", enc))
-            df = pd.read_csv(p, sep=",", encoding=enc, low_memory=False)
-            used_sep = ","
-            break
-        except ParserError:
+    p = Path(path or config.DATA_PATH)
+
+    def _read_single_csv(file_path: Path) -> pd.DataFrame:
+        """Robustly read a single CSV file trying common encodings and separators."""
+        tried = []
+        df_local = None
+        encodings = ["utf-8", "latin-1"]
+        for enc in encodings:
             try:
-                tried.append((";", enc))
-                df = pd.read_csv(p, sep=";", encoding=enc, low_memory=False)
-                used_sep = ";"
+                tried.append((",", enc))
+                df_local = pd.read_csv(file_path, sep=",", encoding=enc, low_memory=False)
                 break
             except ParserError:
-                # Try python engine autodetect
                 try:
-                    tried.append(("auto", enc))
-                    with open(p, "r", encoding=enc, errors="replace") as f:
-                        sample = f.read()
-                    df = pd.read_csv(io.StringIO(sample), sep=None, engine="python")
-                    used_sep = "auto"
+                    tried.append((";", enc))
+                    df_local = pd.read_csv(file_path, sep=";", encoding=enc, low_memory=False)
                     break
+                except ParserError:
+                    try:
+                        tried.append(("auto", enc))
+                        with open(file_path, "r", encoding=enc, errors="replace") as f:
+                            sample = f.read()
+                        df_local = pd.read_csv(io.StringIO(sample), sep=None, engine="python")
+                        break
+                    except Exception:
+                        df_local = None
+        if df_local is None:
+            # Final attempt: let pandas try with default encoding and python engine
+            df_local = pd.read_csv(file_path, sep=None, engine="python", encoding="utf-8", errors="replace")
+        return df_local
+
+    # If the configured path is a directory, load and concatenate all CSV files inside
+    if p.is_dir():
+        csv_files = sorted([f for f in p.glob("**/*.csv") if f.is_file()])
+        if not csv_files:
+            # Fallback: try project-level fallback data files (chatbotdf.csv or BASE.xlsx)
+            repo_root = Path(__file__).resolve().parent.parent
+            fallback_csv = repo_root / "chatbotdf.csv"
+            fallback_xlsx = repo_root / "BASE.xlsx"
+            if fallback_csv.exists():
+                try:
+                    df = _read_single_csv(fallback_csv)
                 except Exception:
                     df = None
-    if df is None:
-        # Final attempt: let pandas try with default encoding and python engine
-        df = pd.read_csv(p, sep=None, engine="python", encoding="utf-8", errors="replace")
+            elif fallback_xlsx.exists():
+                try:
+                    df = pd.read_excel(fallback_xlsx)
+                except Exception:
+                    df = None
+            else:
+                raise FileNotFoundError(f"No CSV files found in directory: {p}")
+            if df is None or df.empty:
+                raise RuntimeError(f"Failed to read any CSV files from {p} or fallback files")
+        else:
+            dfs = []
+            for f in csv_files:
+                try:
+                    dfs.append(_read_single_csv(f))
+                except Exception:
+                    # skip problematic files but continue processing others
+                    continue
+            if not dfs:
+                raise RuntimeError(f"Failed to read any CSV files from {p}")
+            df = pd.concat(dfs, ignore_index=True, sort=False)
+    else:
+        # single file path
+        df = _read_single_csv(p)
 
 
     # Standardize column names
@@ -108,30 +144,70 @@ def df_to_documents(df: pd.DataFrame, chunk_size: int = config.CHUNK_SIZE) -> Li
     """Convert rows into document dicts for embedding. Combine relevant fields."""
     docs = []
     splitter = TokenTextSplitter(chunk_size=chunk_size, chunk_overlap=config.CHUNK_OVERLAP)
+    # Build a lowercase column map so lookups are case-insensitive and tolerant to variants
+    col_map = {str(c).lower(): c for c in df.columns}
+
+    def _lookup(row, *names):
+        """Return the first matching value from row for any of the provided column name variants (case-insensitive)."""
+        for n in names:
+            if n is None:
+                continue
+            # direct match
+            if n in df.columns:
+                v = row.get(n)
+                if v is not None:
+                    return v
+            # case-insensitive
+            key = str(n).lower()
+            if key in col_map:
+                v = row.get(col_map[key])
+                if v is not None:
+                    return v
+        return None
 
     for idx, row in df.iterrows():
         parts = []
-        # Core identifiers
-        for c in ["Client_Principal", "Intitule_client", "Code_Client"]:
-            if c in df.columns and row.get(c):
-                parts.append(f"{c}: {row.get(c)}")
 
-        # Product and category
-        for c in ["Marque", "Famille", "Sous_Famille", "Ref_Article", "Designation"]:
-            if c in df.columns and row.get(c):
-                parts.append(f"{c}: {row.get(c)}")
+        # Core identifiers (case-insensitive): client fields
+        for c in ("Client_Principal", "Intitule_client", "Code_Client", "client_principal", "client"):
+            v = _lookup(row, c)
+            if v:
+                parts.append(f"{c}: {v}")
+
+        # Product and category - accept common lowercased variants returned by forecasts
+        for c in ("Marque", "marque", "Famille", "famille", "Sous_Famille", "Ref_Article", "ref_article", "Designation", "designation"):
+            v = _lookup(row, c)
+            if v:
+                parts.append(f"{c}: {v}")
 
         # Sales metrics
-        for c in ["Qte_Vendu", "CA_HT_BRUT", "Tx_Remise", "CA_HT_NET"]:
-            if c in df.columns:
-                parts.append(f"{c}: {row.get(c)}")
+        for c in ("Qte_Vendu", "qte_vendu", "CA_HT_BRUT", "CA_HT_NET", "ca_ht_net", "Tx_Remise"):
+            v = _lookup(row, c)
+            if v is not None:
+                parts.append(f"{c}: {v}")
 
         # Date info
-        if "Date" in df.columns and not pd.isna(row.get("Date")):
-            parts.append(f"Date: {row.get('Date').date()}")
+        date_v = _lookup(row, "Date", "date")
+        if date_v is not None and not pd.isna(date_v):
+            try:
+                parts.append(f"Date: {pd.to_datetime(date_v).date()}")
+            except Exception:
+                parts.append(f"Date: {date_v}")
         else:
-            if "Mois" in df.columns and "Annee" in df.columns:
-                parts.append(f"Mois: {row.get('Mois')} Annee: {row.get('Annee')}")
+            mois = _lookup(row, "Mois", "mois")
+            annee = _lookup(row, "Annee", "annee", "next_year")
+            if mois is not None and annee is not None:
+                parts.append(f"Mois: {mois} Annee: {annee}")
+
+        # Forecasts (if present) - include avg and per-method forecasts so RAG can reason about predictions
+        forecast_cols = [
+            'avg_forecast', 'sma_forecast', 'es_forecast', 'lr_forecast',
+            'arima_forecast', 'prophet_forecast', 'xgb_forecast', 'next_year'
+        ]
+        for c in forecast_cols:
+            v = _lookup(row, c)
+            if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                parts.append(f"{c}: {v}")
 
         content = " | ".join(parts)
         if not content:
@@ -139,13 +215,26 @@ def df_to_documents(df: pd.DataFrame, chunk_size: int = config.CHUNK_SIZE) -> Li
         # Use token splitter to generate well-sized chunks
         chunks = splitter.split_text(content)
         for i, chunk in enumerate(chunks):
+            # assemble metadata using tolerant lookups
+            year_val = _lookup(row, "Annee", "annee", "next_year")
+            try:
+                year_int = int(year_val) if year_val is not None and str(year_val).isdigit() else None
+            except Exception:
+                year_int = None
+
             docs.append({
                 "content": chunk,
                 "metadata": {
                     "source_row": int(idx),
-                    "client": row.get("Client_Principal"),
-                    "year": int(row.get("Annee")) if row.get("Annee") is not None and str(row.get("Annee")).isdigit() else None,
+                    "client": _lookup(row, "Client_Principal", "client", "Intitule_client"),
+                    "year": year_int,
                     "chunk_index": i,
+                    # include forecast metadata when available
+                    "avg_forecast": _lookup(row, "avg_forecast"),
+                    "sma_forecast": _lookup(row, "sma_forecast"),
+                    "arima_forecast": _lookup(row, "arima_forecast"),
+                    "prophet_forecast": _lookup(row, "prophet_forecast"),
+                    "xgb_forecast": _lookup(row, "xgb_forecast"),
                 },
             })
 

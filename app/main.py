@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routers import forecasts
+from app.api.routers import forecasts, dashboard
 from rag_chatbot import api
 import logging
 
@@ -36,6 +36,7 @@ def create_app() -> FastAPI:
             raise
 
     app.include_router(forecasts.router, prefix="/api")
+    app.include_router(dashboard.router, prefix="/api")
     app.include_router(api.app.router, prefix="/api")
     return app
 

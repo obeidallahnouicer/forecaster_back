@@ -45,15 +45,11 @@ class SalesForecaster:
                  ref_col: str = "Ref Article",
                  date_col: str = "Année",  # Can be year or date
                  sales_col: str = "CA HT NET",
-                 frequency: str = "yearly",  # 'yearly' or 'monthly'
-                 source_hash: str = None,
-                 model_version: str = "v1"):
+                 frequency: str = "yearly"):  # 'yearly' or 'monthly'
         """
         dataframe: raw dataframe containing at least [ref_col, date_col, sales_col]
         cache_dir: folder to store cached models/forecasts/summaries
         frequency: 'yearly' or 'monthly' for aggregation level
-        source_hash: optional fingerprint for cache sharing
-        model_version: version identifier for model cache invalidation
         """
         self.df_raw = dataframe.copy()
         self.ref_col = ref_col
@@ -68,14 +64,8 @@ class SalesForecaster:
         self.grouped_data = None
         self.forecast_results = None
 
-        # cache structure - use shared cache if source_hash provided
-        if source_hash:
-            # Shared cache: cache_dir/source_hash/frequency/
-            self.cache_dir = Path(cache_dir) / source_hash / self.frequency
-        else:
-            # Regular cache: cache_dir/frequency/
-            self.cache_dir = Path(cache_dir) / self.frequency
-        
+        # cache structure
+        self.cache_dir = Path(cache_dir) / self.frequency
         self.model_cache = self.cache_dir / "models"
         self.forecast_cache = self.cache_dir / "forecasts"
         self.summary_cache = self.cache_dir / "summary"
@@ -86,21 +76,6 @@ class SalesForecaster:
         self.has_arima = _HAS_ARIMA
         self.has_prophet = _HAS_PROPHET
         self.has_xgboost = _HAS_XGBOOST
-
-        # source fingerprint to tie caches to exact uploaded dataset
-        # If not provided, derive from dataframe content (deterministic)
-        self.source_hash = source_hash
-        if not self.source_hash:
-            try:
-                # Use a stable CSV serialization to compute hash
-                buf = self.df_raw.to_csv(index=False).encode('utf-8')
-                import hashlib
-                self.source_hash = hashlib.sha1(buf).hexdigest()
-            except Exception:
-                self.source_hash = "unknown"
-
-        # model_version used to invalidate caches when forecasting logic or models change
-        self.model_version = model_version
 
     def _normalize_column_names(self):
         rename_map = {
@@ -425,7 +400,6 @@ class SalesForecaster:
                          fast_mode=True, return_metrics=True):
         """
         Forecast for a single article with detailed metrics for each method.
-        Produces output compatible with both Streamlit dashboard and API consumers.
         """
         import json
         
@@ -440,17 +414,11 @@ class SalesForecaster:
         if len(values) == 0:
             return None
 
-        # Determine next period and legacy next_year
+        # Determine next period
         if self.frequency == 'monthly':
-            next_period = str(periods[-1] + 1)  # ✅ FIX: Convert to string for JSON serialization
-            # next_year legacy: use year of next monthly period
-            try:
-                next_year = int((periods[-1] + 1).to_timestamp().year)
-            except Exception:
-                next_year = None
+            next_period = str(periods[-1] + 1)
         else:
             next_period = int(max(periods) + 1)
-            next_year = int(next_period)
 
         # Fast-mode heuristics
         if fast_mode and len(values) < 6:
@@ -501,27 +469,6 @@ class SalesForecaster:
         min_sales = float(np.min(values))
         std_sales = float(np.std(values))
         trend_pct = float(((values[-1] - values[0]) / values[0]) * 100) if values[0] != 0 else 0.0
-        
-        # Classify trend
-        trend_label = self.classify_trend_label(avg_sales, avg_forecast)
-
-        # Prepare historical fields in both new and legacy shapes
-        try:
-            hist_values_list = [float(v) for v in values]
-        except Exception:
-            hist_values_list = list(values)
-
-        if self.frequency == 'monthly':
-            # represent historical_periods as strings like 'YYYY-MM'
-            hist_periods_serial = [str(p) for p in periods]
-            # For monthly, convert to year integers for the legacy field
-            try:
-                hist_years_list = [int(p.to_timestamp().year) for p in periods]
-            except Exception:
-                hist_years_list = [str(p) for p in periods]
-        else:
-            hist_periods_serial = [int(p) for p in periods]
-            hist_years_list = [int(p) for p in periods]
 
         result = {
             'ref_article': ref_article,
@@ -530,16 +477,10 @@ class SalesForecaster:
             'famille': meta.get('famille'),
             'frequency': self.frequency,
             'next_period': next_period,
-            # legacy key expected in many places
-            'next_year': next_year,
             'avg_forecast': float(avg_forecast),
-            'trend_label': trend_label,
-            # Historical representations (new/serialized) for Streamlit
-            'historical_periods': json.dumps(hist_periods_serial),
-            'historical_values': json.dumps(hist_values_list),
-            # Legacy list-shaped fields expected by API consumers
-            'historical_years': hist_years_list,
-            'historical_values_list': hist_values_list,
+            # Convert periods to strings for JSON serialization
+            'historical_periods': json.dumps([str(p) for p in periods]),
+            'historical_values': json.dumps([float(v) for v in values]),
             'avg_sales': avg_sales,
             'max_sales': max_sales,
             'min_sales': min_sales,
@@ -591,21 +532,6 @@ class SalesForecaster:
         if not df_all.empty:
             df_all['ref_article'] = df_all['ref_article'].astype(str)
             df_all = df_all.sort_values('avg_forecast', ascending=False).reset_index(drop=True)
-            
-            # For parquet storage, drop list columns (they're stored as JSON strings anyway)
-            list_cols = []
-            for col in df_all.columns:
-                try:
-                    # Check if column contains lists
-                    if df_all[col].dtype == 'object':
-                        sample_val = df_all[col].dropna().iloc[0] if len(df_all[col].dropna()) > 0 else None
-                        if isinstance(sample_val, list):
-                            list_cols.append(col)
-                except Exception:
-                    pass
-            
-            if list_cols:
-                df_all = df_all.drop(columns=list_cols)
 
         summary_path = self._summary_cache_path()
         df_all.to_parquet(summary_path, index=False)
@@ -687,4 +613,3 @@ class SalesForecaster:
         self.clear_model_cache()
         self.clear_forecast_cache()
         self.clear_summary_cache()
-

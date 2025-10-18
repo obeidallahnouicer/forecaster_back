@@ -1,2 +1,0 @@
-ref_article,designation,marque,famille,next_year,sma_forecast,es_forecast,lr_forecast,arima_forecast,prophet_forecast,xgb_forecast,avg_forecast,historical_years,historical_values,avg_sales,max_sales,min_sales,std_sales,trend_pct,data_points
-8006569145857,TEINT IALO VERDE 100ML,H. ZONE,IALO,2026,2774.3969999999995,,,,,,2774.3969999999995,"[2020, 2021, 2022, 2023, 2024, 2025]","[1495.176, 4314.993, 4735.644, 3013.188, 2642.115, 2667.888]",3144.8340000000003,4735.644,1495.176,1089.2546845999793,78.43304065875857,6

@@ -4,6 +4,8 @@ import shutil
 import pandas as pd
 from typing import Dict, Optional
 from sales_forecaster import SalesForecaster
+import hashlib
+import os
 
 WORKDIR = Path("./server_data")
 WORKDIR.mkdir(parents=True, exist_ok=True)
@@ -22,12 +24,16 @@ class Registry:
     def __init__(self):
         self._sessions: Dict[str, SessionInfo] = {}
 
-    def create_session_from_file(self, file_path: str) -> SessionInfo:
+    def create_session_from_file(self, file_path: str, frequency: str = "yearly") -> SessionInfo:
         sid = str(uuid.uuid4())
         out_dir = WORKDIR / sid
         out_dir.mkdir(parents=True, exist_ok=True)
         dest = out_dir / Path(file_path).name
         shutil.copy(file_path, dest)
+
+        # Validate frequency
+        if frequency.lower() not in ["yearly", "monthly"]:
+            raise RuntimeError(f"Invalid frequency '{frequency}'. Must be 'yearly' or 'monthly'")
 
         # load with encoding fallbacks for CSVs
         try:
@@ -46,8 +52,29 @@ class Registry:
             # surface a helpful error
             raise RuntimeError(f"Failed to read uploaded file '{dest.name}': {e}")
 
-        cache_dir = str(out_dir / "cache")
-        forecaster = SalesForecaster(dataframe=df, cache_dir=cache_dir)
+        # compute a stable fingerprint of the uploaded file so identical uploads
+        # can share caches. Use SHA1 of raw file bytes.
+        try:
+            with open(dest, 'rb') as fh:
+                file_bytes = fh.read()
+            source_hash = hashlib.sha1(file_bytes).hexdigest()
+        except Exception:
+            source_hash = 'unknown'
+
+        # Use a shared cache location under server_data/shared_cache/<source_hash>/<frequency>
+        shared_cache = WORKDIR / 'shared_cache' / source_hash
+        shared_cache.mkdir(parents=True, exist_ok=True)
+
+        # model version can be provided via env var to allow invalidating caches when code changes
+        model_version = os.getenv('FORECAST_MODEL_VERSION', 'v1')
+
+        forecaster = SalesForecaster(
+            dataframe=df, 
+            cache_dir=str(shared_cache), 
+            source_hash=source_hash, 
+            model_version=model_version,
+            frequency=frequency.lower()
+        )
         forecaster.clean_data()
         forecaster.prepare_data()
 

@@ -1,22 +1,36 @@
-streamlit
+# Data processing
 pandas
 numpy
+openpyxl
+
+# Visualization & analysis
 matplotlib
 seaborn
 scikit-learn
-openpyxl
 statsmodels
 plotly
+streamlit
+
+# Forecasting
 prophet
+
+# Web framework
 fastapi
 uvicorn[standard]
 python-multipart
 python-dotenv
+
+# LLM & RAG
 langchain
-openai
-faiss-cpu
-chromadb
-huggingface-hub
-sentence-transformers
+langchain-community
 langchain_groq
+openai
+chromadb
+sentence-transformers
+
+# Utilities
 tiktoken
+tqdm
+
+# Testing
+pytest
