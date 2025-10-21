@@ -4,7 +4,29 @@ import numpy as np
 import re
 from pathlib import Path
 from . import config
-from langchain.text_splitter import TokenTextSplitter
+try:
+    from langchain.text_splitter import TokenTextSplitter
+except Exception:
+    # Provide a lightweight fallback TokenTextSplitter to avoid hard dependency on langchain
+    class TokenTextSplitter:
+        def __init__(self, chunk_size: int = 2048, chunk_overlap: int = 128):
+            self.chunk_size = chunk_size
+            self.chunk_overlap = chunk_overlap
+
+        def split_text(self, text: str) -> List[str]:
+            if not text:
+                return []
+            # Naive character-based splitter with overlap
+            chunks = []
+            i = 0
+            L = len(text)
+            while i < L:
+                end = min(i + self.chunk_size, L)
+                chunks.append(text[i:end])
+                if end == L:
+                    break
+                i = max(0, end - self.chunk_overlap)
+            return chunks
 from pandas.errors import ParserError
 import io
 

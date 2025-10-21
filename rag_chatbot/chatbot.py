@@ -36,6 +36,8 @@ from langchain.memory import ConversationBufferMemory
 from langchain.schema import HumanMessage
 
 from . import config, retriever, data_loader, prompt_templates, dataset_analyzer, agents, llm_reasoner
+from core.logger import log_agent_step, LogLevel, get_agent_logger
+from agents.base_agent import AgentInput
 
 logger = logging.getLogger("rag.chatbot")
 
@@ -80,6 +82,97 @@ def _clean_citations_from_response(response_text: str) -> str:
     cleaned = re.sub(r'\n\n+', '\n\n', cleaned)  # Remove multiple newlines
     
     return cleaned
+
+
+def execute_agent(agent, agent_input: AgentInput):
+    """Synchronous helper that executes agent.execute or agent.reason.
+
+    If the agent method returns a coroutine, this will run it on an event loop
+    and return the result. Returns the AgentOutput instance.
+    """
+    # Prefer execute()
+    if hasattr(agent, "execute"):
+        try:
+            coro_or_result = agent.execute(agent_input)
+        except Exception as e:
+            # Log and re-raise
+            sid = getattr(agent_input, 'session_id', 'unknown')
+            log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Agent execute raised synchronously', level=LogLevel.ERROR, data={"error": str(e)})
+            raise
+
+        if asyncio.iscoroutine(coro_or_result):
+            # Run coroutine to completion
+            try:
+                sid = getattr(agent_input, 'session_id', 'unknown')
+                log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Running async.execute() on event loop', level=LogLevel.DEBUG)
+            except Exception:
+                pass
+            try:
+                loop = None
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If loop is running (e.g., under some frameworks), create a new loop
+                        new_loop = asyncio.new_event_loop()
+                        return new_loop.run_until_complete(coro_or_result)
+                    else:
+                        return loop.run_until_complete(coro_or_result)
+                except RuntimeError:
+                    new_loop = asyncio.new_event_loop()
+                    return new_loop.run_until_complete(coro_or_result)
+            except Exception as e:
+                sid = getattr(agent_input, 'session_id', 'unknown')
+                log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Async agent execution failed', level=LogLevel.ERROR, data={"error": str(e)})
+                raise
+
+        # Synchronous result
+        try:
+            sid = getattr(agent_input, 'session_id', 'unknown')
+            log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Executed sync.execute()', level=LogLevel.DEBUG)
+        except Exception:
+            pass
+        return coro_or_result
+
+    # Fallback to reason()
+    if hasattr(agent, "reason"):
+        try:
+            coro_or_result = agent.reason(agent_input)
+        except Exception as e:
+            sid = getattr(agent_input, 'session_id', 'unknown')
+            log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Agent reason raised synchronously', level=LogLevel.ERROR, data={"error": str(e)})
+            raise
+
+        if asyncio.iscoroutine(coro_or_result):
+            try:
+                sid = getattr(agent_input, 'session_id', 'unknown')
+                log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Running async.reason() on event loop', level=LogLevel.DEBUG)
+            except Exception:
+                pass
+            try:
+                loop = None
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        new_loop = asyncio.new_event_loop()
+                        return new_loop.run_until_complete(coro_or_result)
+                    else:
+                        return loop.run_until_complete(coro_or_result)
+                except RuntimeError:
+                    new_loop = asyncio.new_event_loop()
+                    return new_loop.run_until_complete(coro_or_result)
+            except Exception as e:
+                sid = getattr(agent_input, 'session_id', 'unknown')
+                log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Async agent reason failed', level=LogLevel.ERROR, data={"error": str(e)})
+                raise
+
+        try:
+            sid = getattr(agent_input, 'session_id', 'unknown')
+            log_agent_step(sid, getattr(agent, 'name', 'unknown'), 'Executed sync.reason()', level=LogLevel.DEBUG)
+        except Exception:
+            pass
+        return coro_or_result
+
+    raise RuntimeError("Agent has no execute() or reason() method")
 
 
 def _extract_and_aggregate_data(retrieved_docs: List[Dict[str, Any]], analyzer: 'dataset_analyzer.DatasetAnalyzer') -> Dict[str, Any]:
@@ -149,9 +242,48 @@ def _extract_and_aggregate_data(retrieved_docs: List[Dict[str, Any]], analyzer: 
         },
     }
     
-    # Find most stable (smallest abs trend_pct)
-    most_stable = min(products, key=lambda p: abs(p["trend_pct"]))
-    aggregates["most_stable"] = most_stable
+    # Find most stable (smallest abs trend_pct) with reliability-aware tie-breakers
+    # Prefer products with more data points (>= MIN_DATA_POINTS_FOR_RELIABILITY)
+    try:
+        min_required = dataset_analyzer.MIN_DATA_POINTS_FOR_RELIABILITY
+    except Exception:
+        min_required = 3
+
+    # Filter out entries missing trend_pct
+    candidates = [p for p in products if p.get("trend_pct") is not None]
+
+    def _safe_vals(p):
+        try:
+            trend = float(p.get("trend_pct", 0))
+        except Exception:
+            trend = 0.0
+        try:
+            dp = int(p.get("data_points", 0))
+        except Exception:
+            dp = 0
+        try:
+            af = float(p.get("avg_forecast", 0))
+        except Exception:
+            af = 0.0
+        return trend, dp, af
+
+    # Prefer candidates meeting the primary data_points threshold
+    primary = [p for p in candidates if _safe_vals(p)[1] >= min_required]
+    if not primary:
+        # Secondary: at least 2 data points
+        primary = [p for p in candidates if _safe_vals(p)[1] >= 2]
+    if not primary:
+        primary = candidates
+
+    if primary:
+        # Sort by (abs(trend_pct) asc, data_points desc, avg_forecast desc)
+        primary_sorted = sorted(
+            primary,
+            key=lambda p: (abs(float(p.get("trend_pct", 0))), -int(p.get("data_points", 0) or 0), -float(p.get("avg_forecast", 0) or 0.0)),
+        )
+        aggregates["most_stable"] = primary_sorted[0]
+    else:
+        aggregates["most_stable"] = None
     
     # Find highest/lowest forecast
     aggregates["highest_forecast"] = max(products, key=lambda p: p["avg_forecast"])
@@ -414,6 +546,14 @@ def _validate_response_against_data(response_text: str, analyzer: 'dataset_analy
     """
     mentioned_products = _extract_mentioned_products(response_text)
     invalid_products = []
+
+    # If the LLM did not mention any explicit product codes, we should not consider
+    # the response "validated" against the dataset. Returning True in that case
+    # is a common false-positive (LLM can answer generically without grounding).
+    if not mentioned_products:
+        logger.debug("No explicit product mentions extracted from LLM response; marking as not validated")
+        # Return False with a marker so callers can log or treat as 'partial' validation
+        return False, ["<no_products_mentioned>"]
     
     for product in mentioned_products:
         # Skip if already validated through different patterns
@@ -436,6 +576,8 @@ def _validate_response_against_data(response_text: str, analyzer: 'dataset_analy
     # Be lenient: only consider response invalid if we found clearly fabricated products
     # (not just extraction mistakes)
     is_valid = len(invalid_products) == 0
+
+    logger.debug(f"Validation check: extracted_products={mentioned_products}, invalid_products={invalid_products}, is_valid={is_valid}")
     return is_valid, invalid_products
 
 
@@ -507,6 +649,43 @@ def _generate_data_backed_answer(query: str, analyzer: 'dataset_analyzer.Dataset
     # to allow LLM to perform proper aggregation across the entire dataset
     
     return None
+
+
+def _is_degenerate_aggregated_data(aggregated_data: Dict[str, Any]) -> Tuple[bool, str]:
+    """Return (True, reason) when aggregated data is degenerate (no meaningful numeric values).
+
+    Degenerate cases include:
+      - No products
+      - Majority (or all) products have data_points == 0
+      - avg_forecast all zero or NaN
+      - trend_pct all zero and trend_label all 'Unknown'
+    """
+    products = aggregated_data.get("products", [])
+    if not products:
+        return True, "no_products"
+
+    total = len(products)
+    if total == 0:
+        return True, "no_products"
+
+    data_points_zero = sum(1 for p in products if (p.get("data_points") in (None, 0)))
+    avg_forecasts = [p.get("avg_forecast") for p in products if p.get("avg_forecast") is not None]
+    trend_pcts = [p.get("trend_pct") for p in products if p.get("trend_pct") is not None]
+    trend_labels = [str(p.get("trend_label", "")).lower() for p in products]
+
+    # If most products have zero data points -> unreliable
+    if data_points_zero >= max(10, int(0.6 * total)):
+        return True, "insufficient_data_points"
+
+    # If all avg_forecast values are zero or missing
+    if avg_forecasts and all((af == 0 or af is None) for af in avg_forecasts):
+        return True, "all_zero_avg_forecast"
+
+    # If trend_pct is present but all zero and trend_label unknown
+    if trend_pcts and all((tp == 0 or tp is None) for tp in trend_pcts) and all(lbl in ("unknown", "") for lbl in trend_labels):
+        return True, "no_trend_information"
+
+    return False, "ok"
 
 
 
@@ -715,7 +894,41 @@ def get_answer(
         # Get vectorstore metadata
         try:
             from rag_chatbot import indexer as rag_indexer
-            meta = rag_indexer.load_vectorstore_metadata(Path(config.VECTORSTORE_DIR) / "chroma")
+            # Try to load metadata from the actual retriever/vectorstore if possible (useful for tests that mock get_vectorstore)
+            meta = None
+            try:
+                # Attempt to introspect persist directory from retriever object
+                persist_dir = None
+                # Common attributes where Chroma stores persist directory
+                if hasattr(retr, 'vectorstore') and getattr(retr, 'vectorstore') is not None:
+                    store_obj = getattr(retr, 'vectorstore')
+                    persist_dir = getattr(store_obj, 'persist_directory', None) or getattr(store_obj, '_persist_directory', None)
+                elif hasattr(retr, 'client') and getattr(retr, 'client') is not None:
+                    client = getattr(retr, 'client')
+                    persist_dir = getattr(client, 'persist_directory', None) or getattr(client, '_persist_directory', None)
+                elif hasattr(retr, 'persist_directory'):
+                    persist_dir = getattr(retr, 'persist_directory')
+
+                if persist_dir:
+                    meta = rag_indexer.load_vectorstore_metadata(Path(persist_dir))
+            except Exception:
+                meta = None
+
+            # Fallback to configured vectorstore path
+            if meta is None:
+                meta = rag_indexer.load_vectorstore_metadata(Path(config.VECTORSTORE_DIR) / "chroma")
+
+            # Extra fallback: scan common temp/persist locations for _meta.json (useful for tests)
+            if meta is None:
+                import glob as _glob
+                candidates = list(Path(".").glob("**/_meta.json"))
+                if candidates:
+                    try:
+                        with open(candidates[0], 'r', encoding='utf-8') as _f:
+                            meta = json.load(_f)
+                    except Exception:
+                        meta = None
+
             num_chunks = meta.get("num_docs", 0) if meta else 0
             embedding_model = meta.get("embedding_model", config.EMBEDDING_MODEL) if meta else config.EMBEDDING_MODEL
         except Exception:
@@ -727,6 +940,210 @@ def get_answer(
             f"retrieved_docs={len(retrieved_docs)}, total_chunks={num_chunks})"
         )
         
+        # If multi-agent orchestration is enabled, run the analysis pipeline
+        try:
+            from . import config as _config
+            if getattr(_config, "MULTI_AGENT_ORCHESTRATION", False):
+                # Lazy import agents to avoid heavy imports at module load
+                from agents.retriever_agent import RetrieverAgent
+                from agents.analysis_agent import AnalysisAgent
+                from agents.reasoning_agent import ReasoningAgent
+                from agents.advisor_agent import AdvisorAgent
+                from agents.validator_agent import ValidatorAgent
+                from core.context_manager import get_context_manager
+
+                session_id = f"session_{int(time.time())}"
+                # Start agent logger session for orchestration
+                try:
+                    agent_logger = get_agent_logger()
+                    try:
+                        agent_logger.start_session(session_id, query, metadata={"source": "get_answer_multi_agent"})
+                    except Exception:
+                        logger.exception("Failed to start agent logger session for session_id=%s", session_id)
+                except Exception:
+                    agent_logger = None
+                cm = get_context_manager()
+                # Create context with retrieved docs
+                ctx = cm.create_context(query, session_id, retrieved_documents=[d.get("metadata", {}) for d in retrieved_info])
+
+                # Structured pipeline logging: Retriever finished
+                try:
+                    # Log number of retrieved docs and top-3 metadata samples
+                    sample_meta = [d.get('metadata', {}) for d in retrieved_info[:3]]
+                    log_agent_step(session_id, 'Retriever', 'Retrieved documents', level=LogLevel.INFO,
+                                   data={"count": len(retrieved_info), "sample_metadata": sample_meta})
+                except Exception:
+                    logger.exception("Failed to log retriever summary")
+
+                # 1) RetrieverAgent - we already have retrieved_info, but execute for logging
+                try:
+                    retr_agent = RetrieverAgent()
+                    ai = AgentInput(query=query, context=ctx, retrieved_documents=retrieved_info, session_id=session_id)
+                    retr_out = execute_agent(retr_agent, ai)
+                    ctx.add_agent_output("RetrieverAgent", retr_out.__dict__)
+                except Exception:
+                    # Continue with retrieved_info
+                    pass
+
+                # 2) Analysis
+                analysis_agent = AnalysisAgent()
+                ai = AgentInput(query=query, context=ctx, retrieved_documents=retrieved_info, session_id=session_id)
+                # Log Analysis input
+                try:
+                    log_agent_step(session_id, 'AnalysisAgent', 'Starting AnalysisAgent with input', level=LogLevel.DEBUG,
+                                   data={"query": query[:200], "doc_count": len(retrieved_info), "sample_meta": [d.get('metadata', {}) for d in retrieved_info[:3]]})
+                except Exception:
+                    logger.exception("Failed to emit analysis input log")
+
+                analysis_out = execute_agent(analysis_agent, ai)
+
+                # Log Analysis output summary
+                try:
+                    out_summary = {"success": analysis_out.success, "confidence": analysis_out.confidence}
+                    # include data keys and small sample
+                    if isinstance(analysis_out.data, dict):
+                        out_summary['data_keys'] = list(analysis_out.data.keys())
+                        # small samples for large dicts
+                        if 'products' in analysis_out.data and isinstance(analysis_out.data['products'], dict):
+                            out_summary['products_sample'] = list(list(analysis_out.data['products'].keys())[:5])
+                    log_agent_step(session_id, 'AnalysisAgent', 'Completed AnalysisAgent', level=LogLevel.INFO, data=out_summary)
+                except Exception:
+                    logger.exception("Failed to emit analysis output log")
+
+                ctx.add_agent_output("AnalysisAgent", analysis_out.__dict__)
+
+                # 3) Reasoning (LLM-based interpretation)
+                reasoning_agent = ReasoningAgent()
+                # Build aggregated data for reasoning
+                try:
+                    # Acquire analyzer if needed for aggregation
+                    try:
+                        analyzer = dataset_analyzer.get_analyzer()
+                    except Exception:
+                        analyzer = None
+
+                    aggregated_data = _extract_and_aggregate_data(retrieved_info, analyzer)
+                except Exception as e:
+                    log_agent_step(session_id, 'AnalysisAgent', 'Failed to aggregate data for reasoning', level=LogLevel.ERROR, data={"error": str(e)})
+                    raise
+
+                # Degenerate data guard for multi-agent orchestration
+                is_deg, deg_reason = _is_degenerate_aggregated_data(aggregated_data)
+                if is_deg:
+                    log_agent_step(session_id, 'AnalysisAgent', 'Degenerate aggregated data detected; aborting multi-agent orchestration', level=LogLevel.ERROR,
+                                   data={"reason": deg_reason, "product_count": aggregated_data.get('count', 0)})
+                    # Build structured result to return to caller
+                    return {
+                        "answer": None,
+                        "llm_prompt": llm_prompt,
+                        "sources": sources,
+                        "retrieved_docs": retrieved_info,
+                        "analysis": aggregated_data,
+                        "reasoning": None,
+                        "advisor": None,
+                        "validator": None,
+                        "embedding_model": embedding_model,
+                        "num_chunks": num_chunks,
+                        "retrieval_time_s": retrieval_time,
+                        "error": f"degenerate_data:{deg_reason}",
+                    }
+
+                # Build explicit reasoning prompt and log it (truncate to 2000 chars)
+                reasoning_prompt = _build_reasoning_prompt(query, aggregated_data, retrieved_info)
+                try:
+                    log_agent_step(session_id, 'ReasoningAgent', 'Prepared reasoning prompt', level=LogLevel.DEBUG,
+                                   data={"prompt_truncated": reasoning_prompt[:2000]})
+                except Exception:
+                    logger.exception("Failed to log reasoning prompt")
+
+                ai = AgentInput(query=query, context=ctx, retrieved_documents=retrieved_info, session_id=session_id,
+                                metadata={"reasoning_prompt": reasoning_prompt, "aggregated_data_summary": {"count": aggregated_data.get('count')}})
+
+                # Execute with one retry for LLM failures
+                reasoning_out = execute_agent(reasoning_agent, ai)
+                if not reasoning_out.success:
+                    # Retry once and log retry attempt
+                    log_agent_step(session_id, 'ReasoningAgent', 'ReasoningAgent failed, retrying once', level=LogLevel.WARNING,
+                                   data={"error": reasoning_out.error})
+                    reasoning_out = execute_agent(reasoning_agent, ai)
+
+                # Log Reasoning output
+                try:
+                    out_summary = {"success": reasoning_out.success, "confidence": reasoning_out.confidence}
+                    if isinstance(reasoning_out.data, dict):
+                        out_summary['data_keys'] = list(reasoning_out.data.keys())
+                    log_agent_step(session_id, 'ReasoningAgent', 'Completed ReasoningAgent', level=LogLevel.INFO, data=out_summary,
+                                   success=reasoning_out.success, error=reasoning_out.error)
+                except Exception:
+                    logger.exception("Failed to emit reasoning output log")
+
+                ctx.add_agent_output("ReasoningAgent", reasoning_out.__dict__)
+
+                # 4) Advisor
+                advisor_agent = AdvisorAgent()
+                ai = AgentInput(query=query, context=ctx, retrieved_documents=retrieved_info, session_id=session_id,
+                                metadata={"reasoning_summary_keys": list(reasoning_out.data.keys()) if isinstance(reasoning_out.data, dict) else None})
+                log_agent_step(session_id, 'AdvisorAgent', 'Starting AdvisorAgent', level=LogLevel.DEBUG,
+                               data={"based_on_reasoning_success": reasoning_out.success})
+                advisor_out = execute_agent(advisor_agent, ai)
+                try:
+                    out_summary = {"success": advisor_out.success, "confidence": advisor_out.confidence}
+                    if isinstance(advisor_out.data, dict):
+                        out_summary['data_keys'] = list(advisor_out.data.keys())
+                    log_agent_step(session_id, 'AdvisorAgent', 'Completed AdvisorAgent', level=LogLevel.INFO, data=out_summary,
+                                   success=advisor_out.success, error=advisor_out.error)
+                except Exception:
+                    logger.exception("Failed to emit advisor output log")
+                ctx.add_agent_output("AdvisorAgent", advisor_out.__dict__)
+
+                # 5) Validator
+                validator_agent = ValidatorAgent()
+                ai = AgentInput(query=query, context=ctx, retrieved_documents=retrieved_info, session_id=session_id,
+                                metadata={"advisor_summary_keys": list(advisor_out.data.keys()) if isinstance(advisor_out.data, dict) else None})
+                log_agent_step(session_id, 'ValidatorAgent', 'Starting ValidatorAgent', level=LogLevel.DEBUG)
+                validator_out = execute_agent(validator_agent, ai)
+                try:
+                    out_summary = {"success": validator_out.success, "confidence": validator_out.confidence}
+                    if isinstance(validator_out.data, dict):
+                        out_summary['data_keys'] = list(validator_out.data.keys())
+                    log_agent_step(session_id, 'ValidatorAgent', 'Completed ValidatorAgent', level=LogLevel.INFO, data=out_summary,
+                                   success=validator_out.success, error=validator_out.error)
+                except Exception:
+                    logger.exception("Failed to emit validator output log")
+                ctx.add_agent_output("ValidatorAgent", validator_out.__dict__)
+
+                # Build structured response
+                result = {
+                    "answer": None,
+                    "llm_prompt": llm_prompt,
+                    "sources": sources,
+                    "retrieved_docs": retrieved_info,
+                    "analysis": analysis_out.data if hasattr(analysis_out, 'data') else analysis_out,
+                    "reasoning": reasoning_out.data if hasattr(reasoning_out, 'data') else reasoning_out,
+                    "advisor": advisor_out.data if hasattr(advisor_out, 'data') else advisor_out,
+                    "validator": validator_out.data if hasattr(validator_out, 'data') else validator_out,
+                    "embedding_model": embedding_model,
+                    "num_chunks": num_chunks,
+                    "retrieval_time_s": retrieval_time,
+                }
+                # End agent logger session
+                try:
+                    if agent_logger:
+                        agent_logger.end_session(session_id)
+                except Exception:
+                    logger.exception("Failed to end agent logger session for session_id=%s", session_id)
+
+                return result
+        except Exception:
+            # End agent logger session if present
+            try:
+                if 'session_id' in locals() and agent_logger:
+                    agent_logger.end_session(session_id)
+            except Exception:
+                logger.exception("Failed to end agent logger session after orchestration failure")
+            # Fall back to original llm_prompt return path if pipeline fails
+            pass
+
         return {
             "answer": None,  # Use llm_prompt with an LLM provider
             "llm_prompt": llm_prompt,
@@ -835,29 +1252,46 @@ def chat(message: str, thread_id: str) -> Dict[str, Any]:
     # Add to memory
     memory = get_memory(thread_id)
     memory.chat_memory.add_user_message(message)
+
+    # Start an agent reasoning session for this chat (so agent logs have a session)
+    try:
+        agent_logger = get_agent_logger()
+        try:
+            agent_logger.start_session(thread_id, message, metadata={"source": "chat_api"})
+        except Exception:
+            # Non-fatal: continue without session persistence
+            logger.exception("Failed to start agent reasoning session for thread_id=%s", thread_id)
+    except Exception:
+        agent_logger = None
     
     try:
-        # Step 1: Try direct pattern-based answer from dataset
+        # Step 1: Acquire the dataset analyzer and validate dataset integrity
         analyzer = dataset_analyzer.get_analyzer()
-        data_backed_answer = _generate_data_backed_answer(message, analyzer)
-        
-        if data_backed_answer:
-            logger.info(f"Generated data-backed answer for thread_id={thread_id}")
-            memory.chat_memory.add_ai_message(data_backed_answer)
-            _persist_memory(thread_id)
-            
-            return {
-                "answer": data_backed_answer,
-                "source": "data_backed",
-                "thread_id": thread_id,
-                "source_documents": [],
-                "metadata": {
-                    "type": "direct_analysis",
-                    "validation": "data_backed",
-                    "num_chunks": 0,
-                    "retrieval_time_s": 0.0,
-                }
-            }
+
+        # Enforce strict dataset integrity: required columns must be present.
+        # Do not proceed or attempt any fallback if key columns are missing.
+        required_col = "ref_article"
+        try:
+            cols = list(analyzer.df.columns)
+        except Exception:
+            # If analyzer.df is not accessible for any reason, log and abort
+            msg = f"Critical dataset integrity issue: analyzer DataFrame not accessible (source={getattr(config, 'DATA_PATH', 'unknown')}). Aborting analysis."
+            logger.error(msg, exc_info=True)
+            raise RuntimeError(msg)
+
+        if required_col not in cols:
+            msg = (
+                f"Critical dataset integrity issue: missing required column '{required_col}' in dataset (source={getattr(config, 'DATA_PATH', 'unknown')}). Aborting analysis."
+            )
+            # Log as ERROR with stack trace for visibility in logs
+            logger.error(msg, exc_info=True)
+            # Disable any silent fallback — raise to abort processing upstream
+            raise RuntimeError(msg)
+
+        # Proceed with direct pattern-based answer generation now that data is valid
+        # Enforced policy: data-backed/deterministic answers are disabled.
+        # Do not call _generate_data_backed_answer under any circumstances.
+        data_backed_answer = None
         
         # Step 2: ALWAYS load ALL products for maximum context and best possible answers
         logger.info(f"🚀 Loading ALL products for maximum LLM context (query: '{message[:80]}...')")
@@ -895,6 +1329,40 @@ def chat(message: str, thread_id: str) -> Dict[str, Any]:
         
         # Step 3: Extract and aggregate numeric data from retrieved docs
         aggregated_data = _extract_and_aggregate_data(retrieved_docs_raw, analyzer)
+
+        # Detect degenerate aggregated data and abort LLM calls to avoid hallucination
+        is_deg, deg_reason = _is_degenerate_aggregated_data(aggregated_data)
+        if is_deg:
+            logger.error(f"Degenerate dataset detected (reason={deg_reason}); aborting LLM synthesis")
+            try:
+                log_agent_step(thread_id, 'Chat', 'Degenerate aggregated data detected; aborting LLM', level=LogLevel.ERROR,
+                               data={"reason": deg_reason, "product_count": aggregated_data.get('count', 0)})
+            except Exception:
+                logger.exception("Failed to log degenerate data event")
+
+            answer = f"Cannot answer reliably: dataset is degenerate ({deg_reason}). Please provide a richer dataset or check data quality."
+            memory.chat_memory.add_ai_message(answer)
+            _persist_memory(thread_id)
+
+            # End session if started
+            try:
+                if agent_logger:
+                    agent_logger.end_session(thread_id)
+            except Exception:
+                logger.exception("Failed to end agent reasoning session for thread_id=%s", thread_id)
+
+            return {
+                "answer": answer,
+                "source": "error",
+                "thread_id": thread_id,
+                "source_documents": [],
+                "error": f"degenerate_data:{deg_reason}",
+                "metadata": {
+                    "type": "degenerate_data",
+                    "reason": deg_reason,
+                    "num_products": aggregated_data.get('count', 0),
+                }
+            }
         
         # Step 4: Build reasoning prompt with structured context
         reasoning_prompt = _build_reasoning_prompt(
@@ -928,8 +1396,10 @@ def chat(message: str, thread_id: str) -> Dict[str, Any]:
                 is_valid, invalid_products = _validate_response_against_data(answer, analyzer)
                 
                 if is_valid:
-                    validation_status = "data_backed"
-                    logger.info(f"LLM response validated successfully")
+                    # Mark as validated by checks but do NOT mark as 'data_backed'
+                    # to avoid exposing deterministic/data-only answer flags.
+                    validation_status = "validated"
+                    logger.info(f"LLM response validated successfully (marked as 'validated')")
                 else:
                     logger.warning(f"LLM response contains invalid products: {invalid_products}")
                     # Still use the answer but mark validation as partial
@@ -941,13 +1411,39 @@ def chat(message: str, thread_id: str) -> Dict[str, Any]:
         
         # Step 6: Fallback to structured summary if LLM unavailable
         if answer is None:
-            answer = _generate_fallback_answer(aggregated_data, message)
-            validation_status = "data_backed"
-            logger.info("Using fallback structured summary")
+            # Enforce: no fallback structured (data-backed) answers allowed.
+            err_msg = (
+                "LLM synthesis unavailable and deterministic/fallback answers are disallowed by policy."
+            )
+            logger.error(err_msg)
+            # End session if started
+            try:
+                if agent_logger:
+                    agent_logger.end_session(thread_id)
+            except Exception:
+                logger.exception("Failed to end agent reasoning session for thread_id=%s", thread_id)
+
+            return {
+                "answer": None,
+                "source": "error",
+                "thread_id": thread_id,
+                "source_documents": [],
+                "error": "llm_unavailable_and_data_backed_forbidden",
+                "metadata": {
+                    "type": "no_answer",
+                    "reason": "llm_unavailable_and_data_backed_forbidden",
+                }
+            }
         
         # Add to memory
         memory.chat_memory.add_ai_message(answer)
         _persist_memory(thread_id)
+        # End session if started
+        try:
+            if agent_logger:
+                agent_logger.end_session(thread_id)
+        except Exception:
+            logger.exception("Failed to end agent reasoning session for thread_id=%s", thread_id)
         
         # Track last retrieval
         with _last_retrievals_lock:
@@ -982,7 +1478,10 @@ def chat(message: str, thread_id: str) -> Dict[str, Any]:
             "thread_id": thread_id,
             "source_documents": top_source_docs,
             "metadata": {
-                "type": "dataset_wide_analysis" if needs_all_products else "retrieval_synthesis",
+                # Always use a retrieval synthesis metadata type to avoid exposing
+                # dataset-wide deterministic analysis labels. Keep used_all_products
+                # for internal diagnostics but do not change the public 'type'.
+                "type": "retrieval_synthesis",
                 "validation": validation_status,
                 "num_chunks": len(retrieved_docs_raw),
                 "retrieval_time_s": retrieval_time,
@@ -996,7 +1495,13 @@ def chat(message: str, thread_id: str) -> Dict[str, Any]:
         answer = f"Error processing your request: {str(e)}"
         memory.chat_memory.add_ai_message(answer)
         _persist_memory(thread_id)
-        
+        # End session if started
+        try:
+            if agent_logger:
+                agent_logger.end_session(thread_id)
+        except Exception:
+            logger.exception("Failed to end agent reasoning session for thread_id=%s", thread_id)
+
         return {
             "answer": answer,
             "source": "error",

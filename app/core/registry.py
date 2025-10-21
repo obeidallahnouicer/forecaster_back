@@ -75,8 +75,25 @@ class Registry:
             model_version=model_version,
             frequency=frequency.lower()
         )
-        forecaster.clean_data()
-        forecaster.prepare_data()
+        # If the uploaded dataframe already contains aggregated summary fields
+        # (e.g., 'avg_forecast' and 'trend_pct'), treat it as a precomputed summary
+        # and avoid running clean_data()/prepare_data() which expect raw sales columns
+        lower_cols = [c.lower() for c in df.columns]
+        if 'avg_forecast' in lower_cols and 'trend_pct' in lower_cols:
+            # Normalize column names to match forecaster expectations where possible
+            # Ensure the reference column exists under forecaster.ref_col; otherwise try common variants
+            # The SalesForecaster already attempts basic normalization in __init__
+            try:
+                # Assign the provided dataframe directly as grouped_data (summary)
+                forecaster.grouped_data = df.copy()
+                forecaster.df_clean = df.copy()
+            except Exception:
+                # Fall back to normal flow if assignment fails
+                forecaster.clean_data()
+                forecaster.prepare_data()
+        else:
+            forecaster.clean_data()
+            forecaster.prepare_data()
 
         info = SessionInfo(sid, str(dest), forecaster)
         self._sessions[sid] = info

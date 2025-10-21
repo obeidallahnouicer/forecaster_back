@@ -1,0 +1,12 @@
+{
+  "session_id": "session-1760783076729",
+  "query": "what is the most stable articel ?",
+  "start_time": "2025-10-18T11:24:38.416586",
+  "end_time": "2025-10-18T11:24:41.136253",
+  "duration_seconds": 2.719667,
+  "success_rate": 0.0,
+  "steps": [],
+  "metadata": {
+    "source": "chat_api"
+  }
+}

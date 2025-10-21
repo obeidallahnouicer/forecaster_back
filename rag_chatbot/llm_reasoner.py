@@ -168,6 +168,27 @@ class LLMReasoner:
     def is_available(self) -> bool:
         """Check if LLM is available."""
         return self.llm is not None
+
+    def invoke_with_prompts(self, system_prompt: str, human_prompt: str) -> str:
+        """
+        Send a custom system + human prompt to the LLM and return raw string response.
+
+        This is a low-level helper used by agents that need custom prompting
+        (query expansion, scoring, JSON outputs, etc.).
+        """
+        if not self.is_available():
+            raise RuntimeError("LLM not available")
+
+        try:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=human_prompt),
+            ]
+            response = self.llm.invoke(messages)
+            return response.content
+        except Exception as e:
+            self.logger.exception(f"LLM invoke failed: {e}")
+            raise
     
     async def reason_about_data(
         self,

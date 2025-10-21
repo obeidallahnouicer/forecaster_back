@@ -4,8 +4,6 @@ numpy
 openpyxl
 
 # Visualization & analysis
-matplotlib
-seaborn
 scikit-learn
 statsmodels
 plotly
@@ -29,7 +27,6 @@ chromadb
 sentence-transformers
 
 # Utilities
-tiktoken
 tqdm
 
 # Testing

@@ -1,0 +1,12 @@
+{
+  "session_id": "test_thread_123",
+  "query": "What about Product B?",
+  "start_time": "2025-10-18T12:05:26.461904",
+  "end_time": "2025-10-18T12:05:27.676741",
+  "duration_seconds": 1.214837,
+  "success_rate": 0.0,
+  "steps": [],
+  "metadata": {
+    "source": "chat_api"
+  }
+}

@@ -1,0 +1,1 @@
+[{"role": "user", "text": "what is the most stable product ?"}, {"role": "ai", "text": "Cannot answer reliably: dataset is degenerate (insufficient_data_points). Please provide a richer dataset or check data quality."}]

@@ -682,14 +682,23 @@ class BusinessAgent(Agent):
         try:
             # Get analysis from previous agents
             analysis_output = agent_input.context.get("analysis_agent_output") if agent_input.context else None
-            
+
+            # Normalize: allow either AgentOutput or plain dict
+            if isinstance(analysis_output, AgentOutput):
+                analysis_data = analysis_output.data or {}
+            elif isinstance(analysis_output, dict):
+                # If dict has nested 'data', prefer it; otherwise treat dict as data
+                analysis_data = analysis_output.get("data", analysis_output)
+            else:
+                analysis_data = None
+
             if not analysis_output:
                 reasoning_steps.append(
                     self._log_reasoning_step("No analysis data available, generating generic recommendations")
                 )
                 return await self._fallback_business_analysis(reasoning_steps)
             
-            analysis_data = analysis_output.get("data", {})
+            # analysis_data is now a dict with analysis content
             reasoning_steps.append(
                 self._log_reasoning_step("Beginning business interpretation")
             )
@@ -1091,9 +1100,10 @@ class AnswerAgent(Agent):
             # Build base answer from agents
             base_answer = self._compose_base_answer(
                 agent_input.query,
-                data_agent_output,
-                analysis_agent_output,
-                business_agent_output
+                # Normalize: support AgentOutput objects
+                data_agent_output.data if isinstance(data_agent_output, AgentOutput) else (data_agent_output if isinstance(data_agent_output, dict) else {}),
+                analysis_agent_output.data if isinstance(analysis_agent_output, AgentOutput) else (analysis_agent_output if isinstance(analysis_agent_output, dict) else {}),
+                business_agent_output.data if isinstance(business_agent_output, AgentOutput) else (business_agent_output if isinstance(business_agent_output, dict) else {})
             )
             reasoning_steps.append(
                 self._log_reasoning_step("Composed base answer from agent insights")

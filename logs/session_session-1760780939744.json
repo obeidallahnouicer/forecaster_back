@@ -1,0 +1,12 @@
+{
+  "session_id": "session-1760780939744",
+  "query": "what is the most stable product ?",
+  "start_time": "2025-10-18T10:49:09.192264",
+  "end_time": "2025-10-18T10:49:09.242684",
+  "duration_seconds": 0.05042,
+  "success_rate": 0.0,
+  "steps": [],
+  "metadata": {
+    "source": "chat_api"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "session_id": "default",
+  "query": "hey what famille has best products according to forecast ?",
+  "start_time": "2025-10-18T12:27:18.999997",
+  "end_time": "2025-10-18T12:27:20.853042",
+  "duration_seconds": 1.853045,
+  "success_rate": 0.0,
+  "steps": [],
+  "metadata": {
+    "source": "chat_api"
+  }
+}

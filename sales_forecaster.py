@@ -8,6 +8,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import unicodedata
+import difflib
 
 # Try imports that may be optional
 try:
@@ -103,6 +105,7 @@ class SalesForecaster:
         self.model_version = model_version
 
     def _normalize_column_names(self):
+        # Basic renames preserved from legacy datasets
         rename_map = {
             'Intitule Marque': 'Marque',
             'Intitule Famille': 'Famille',
@@ -111,6 +114,83 @@ class SalesForecaster:
         for old, new in rename_map.items():
             if old in self.df_raw.columns and new not in self.df_raw.columns:
                 self.df_raw.rename(columns={old: new}, inplace=True)
+
+        # Additional normalization: map common variants of the key columns (ref, sales, date)
+        # to the expected names (self.ref_col, self.sales_col, self.date_col).
+        # Use unicode normalization and fuzzy matching to be robust to accents and punctuation.
+
+        def norm(s: str) -> str:
+            if s is None:
+                return ""
+            # Normalize unicode accents, lowercase, replace punctuation with spaces, collapse spaces
+            s = str(s)
+            s = unicodedata.normalize('NFKD', s)
+            s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+            s = s.lower()
+            # Replace non-alphanumeric with spaces
+            s = ''.join(ch if ch.isalnum() else ' ' for ch in s)
+            s = ' '.join(s.split())
+            return s
+
+        existing = list(self.df_raw.columns)
+        normalized_map = {norm(c): c for c in existing}
+
+        variants = {
+            'ref': [
+                'ref article', 'ref_article', 'ref-article', 'reference', 'article ref', 'ref'
+            ],
+            'sales': [
+                'ca ht net', 'ca_ht_net', 'cahtnet', 'sales', 'sales ht net', 'amount ht', 'ca ht', 'net sales', 'montant ht', "chiffre d'affaire", 'chiffre affaires', 'chiffre affaires net'
+            ],
+            'date': [
+                'annee', 'année', 'year', 'date', 'periode', 'period', 'period key'
+            ]
+        }
+
+        import logging
+        logger_sf = logging.getLogger('sales_forecaster')
+
+        def find_and_rename(target_col_name: str, variant_list: list):
+            # Already present
+            if target_col_name in self.df_raw.columns:
+                return
+            # Try exact normalized match first
+            for v in variant_list:
+                vnorm = norm(v)
+                if vnorm in normalized_map:
+                    orig = normalized_map[vnorm]
+                    try:
+                        self.df_raw.rename(columns={orig: target_col_name}, inplace=True)
+                        logger_sf.info(f"Normalized column: '{orig}' -> '{target_col_name}'")
+                        # update maps
+                        normalized_map[norm(target_col_name)] = target_col_name
+                        if vnorm in normalized_map:
+                            del normalized_map[vnorm]
+                    except Exception:
+                        logger_sf.exception(f"Failed to rename column {orig} to {target_col_name}")
+                    return
+
+            # No exact normalized match; try fuzzy match among normalized names
+            choices = list(normalized_map.keys())
+            for v in variant_list:
+                vnorm = norm(v)
+                matches = difflib.get_close_matches(vnorm, choices, n=2, cutoff=0.8)
+                if matches:
+                    orig = normalized_map[matches[0]]
+                    try:
+                        self.df_raw.rename(columns={orig: target_col_name}, inplace=True)
+                        logger_sf.info(f"Fuzzy-normalized column: '{orig}' -> '{target_col_name}' (matched '{v}')")
+                        normalized_map[norm(target_col_name)] = target_col_name
+                        if matches[0] in normalized_map:
+                            del normalized_map[matches[0]]
+                    except Exception:
+                        logger_sf.exception(f"Failed fuzzy rename column {orig} to {target_col_name}")
+                    return
+
+        # Apply normalization for expected column names
+        find_and_rename(self.ref_col, variants['ref'])
+        find_and_rename(self.sales_col, variants['sales'])
+        find_and_rename(self.date_col, variants['date'])
 
     # -------------------------
     # Data prep with monthly/yearly support
@@ -121,7 +201,61 @@ class SalesForecaster:
         required = [self.ref_col, self.sales_col]
         missing = [c for c in required if c not in df.columns]
         if missing:
-            raise ValueError(f"Missing columns in the dataset: {missing}")
+            # Last-resort: try to find close matches among existing columns using unicode normalization
+            def norm_local(s: str) -> str:
+                s = str(s)
+                s = unicodedata.normalize('NFKD', s)
+                s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+                s = s.lower()
+                s = ''.join(ch if ch.isalnum() else ' ' for ch in s)
+                s = ' '.join(s.split())
+                return s
+
+            existing = list(df.columns)
+            existing_norm = {norm_local(c): c for c in existing}
+
+            import difflib
+            attempted = {}
+            for req_col in list(missing):
+                target_norm = norm_local(req_col)
+                # exact normalized match
+                if target_norm in existing_norm:
+                    orig = existing_norm[target_norm]
+                    df.rename(columns={orig: req_col}, inplace=True)
+                    attempted[req_col] = orig
+                    missing.remove(req_col)
+                    continue
+
+                # fuzzy matches
+                choices = list(existing_norm.keys())
+                matches = difflib.get_close_matches(target_norm, choices, n=1, cutoff=0.7)
+                if matches:
+                    orig = existing_norm[matches[0]]
+                    df.rename(columns={orig: req_col}, inplace=True)
+                    attempted[req_col] = orig
+                    missing.remove(req_col)
+
+            if attempted:
+                try:
+                    import logging
+                    logging.getLogger('sales_forecaster').info(f"Applied fallback renames in clean_data: {attempted}")
+                except Exception:
+                    pass
+
+            if missing:
+                # Provide a clearer error message with available columns and suggestions
+                available = existing
+                suggestions = {}
+                for req_col in missing:
+                    target_norm = norm_local(req_col)
+                    choices = list(existing_norm.keys())
+                    close = difflib.get_close_matches(target_norm, choices, n=3, cutoff=0.5)
+                    suggestions[req_col] = [existing_norm[c] for c in close]
+
+                raise ValueError(
+                    f"Missing columns in the dataset: {missing}. Available columns: {available}. "
+                    f"Suggestions: {suggestions}"
+                )
 
         df_clean = df[df[self.sales_col].notna() & (df[self.sales_col] != 0)].copy()
         

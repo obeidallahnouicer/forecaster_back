@@ -29,6 +29,9 @@ GROQ_API_KEY = os.getenv("Groq_Api_key") or os.getenv("GROQ_API_KEY")
 # Groq model name
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
+# Multi-agent orchestration flag: when True, run the Retriever->Analysis->Reasoning->Advisor->Validator pipeline
+MULTI_AGENT_ORCHESTRATION = os.getenv("MULTI_AGENT_ORCHESTRATION", "true").lower() in ("1", "true", "yes")
+
 # ============================================================================
 # EMBEDDING CONFIGURATION (Production-ready)
 # ============================================================================
@@ -58,6 +61,16 @@ EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", _get_embedding_device())
 
 # Primary data source: forecast-summary.csv at repo root
 DATA_PATH = Path(__file__).resolve().parent.parent / "cache" / "forecasts"
+# When True, force the RAG/chatbot to use the repository-level 'forecast-summary.csv'
+# and do not fallback to uploaded server_data files. Controlled via env var
+# RAG_FORCE_REPO_SUMMARY (default: 0). Set to '1' to enable.
+FORCE_REPO_SUMMARY = os.getenv("RAG_FORCE_REPO_SUMMARY", "0") in ("1", "true", "True")
+
+# Data-backed deterministic answers are permanently disabled in this build.
+# This enforces a strict policy: the system must not produce deterministic
+# dataset-only answers or structured fallbacks. Leave as False to make the
+# behavior unconditional (no environment toggle).
+ENABLE_DATA_BACKED_ANSWERS = False
 
 # Vectorstore persistence directory
 VECTORSTORE_DIR = Path(__file__).resolve().parent.parent / "cache" / "vectorstore"

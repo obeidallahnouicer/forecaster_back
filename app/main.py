@@ -1,6 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers import forecasts, dashboard
+from app.core.config import (
+    ALLOWED_ORIGINS, ALLOWED_METHODS, ALLOWED_HEADERS,
+    LOG_LEVEL, LOG_FORMAT, DEBUG
+)
 from rag_chatbot import api
 import logging
 
@@ -8,17 +12,22 @@ import logging
 def create_app() -> FastAPI:
     # configure basic logging
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s"
+        level=getattr(logging, LOG_LEVEL.upper()),
+        format=LOG_FORMAT
     )
 
-    app = FastAPI(title="Sales Forecaster API (modular)")
+    app = FastAPI(
+        title="Sales Forecaster API",
+        description="Advanced sales forecasting API with multiple ML methods",
+        version="1.0.0",
+        debug=DEBUG
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=ALLOWED_ORIGINS,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=ALLOWED_METHODS,
+        allow_headers=ALLOWED_HEADERS,
     )
 
     # simple request logging middleware

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 from app.core.registry import REGISTRY
-from app.schemas import UploadResponse, ArticleListResponse, ForecastArticleRequest, ForecastArticleResponse, SummaryResponse
+from app.schemas import UploadResponse, ArticleListResponse
 import pandas as pd
 from rag_chatbot.data_loader import load_and_preprocess
 from typing import Optional, List
@@ -10,7 +10,7 @@ import logging
 import math
 import numpy as np
 import datetime
-import hashlib
+from pydantic import BaseModel
 
 # Global cache directory (project-root / "cache")
 # file is at app/api/routers/forecasts.py -> parents[3] == project root
@@ -140,6 +140,57 @@ async def list_articles(session_id: str):
 async def list_sessions():
     keys = REGISTRY.list_sessions()
     return {"count": len(keys), "sessions": keys}
+
+
+class SessionCreateRequest(BaseModel):
+    # Server-side path to an uploaded CSV/XLSX file that already exists on the server.
+    # If omitted, the endpoint will attempt to use the repository-level 'forecast-summary.csv'.
+    file_path: Optional[str] = None
+    frequency: str = "yearly"
+
+
+@router.post("/sessions")
+async def create_session(req: SessionCreateRequest):
+    """Create a new forecasting session from an existing server-side file.
+
+    Request body:
+      - file_path (optional): absolute or repo-relative path to a CSV/XLSX file already present on the server.
+      - frequency: 'yearly' or 'monthly' (default 'yearly')
+
+    If file_path is omitted, the endpoint will try to use the repository root file 'forecast-summary.csv'.
+    """
+    # Resolve file path
+    try:
+        if req.file_path:
+            fp = Path(req.file_path)
+            # Allow repo-relative paths
+            if not fp.exists():
+                repo_root = Path(__file__).resolve().parents[3]
+                fp = (repo_root / req.file_path).resolve()
+
+            if not fp.exists():
+                raise HTTPException(status_code=400, detail=f"file_path does not exist on server: {req.file_path}")
+        else:
+            repo_root = Path(__file__).resolve().parents[3]
+            fp = repo_root / "forecast-summary.csv"
+            if not fp.exists():
+                raise HTTPException(status_code=400, detail=(
+                    "No file_path provided and repository-level 'forecast-summary.csv' not found. "
+                    "Upload via /api/upload or provide an existing server-side file_path."))
+
+        info = REGISTRY.create_session_from_file(str(fp), frequency=req.frequency)
+        logger.info(f"Created session {info.session_id} from server file {fp} (frequency={req.frequency})")
+        rows = getattr(info.forecaster, "df_raw", None).shape[0] if getattr(info.forecaster, "df_raw", None) is not None else 0
+        return {"session_id": info.session_id, "rows": int(rows)}
+
+    except RuntimeError as e:
+        logger.exception(f"Failed to create session from file (read error): {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to create session from file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/sessions/{session_id}")

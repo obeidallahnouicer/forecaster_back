@@ -1,0 +1,12 @@
+{
+  "session_id": "session-1760785567086",
+  "query": "what product is best according to forecast ?",
+  "start_time": "2025-10-18T12:07:58.702384",
+  "end_time": "2025-10-18T12:08:00.179578",
+  "duration_seconds": 1.477194,
+  "success_rate": 0.0,
+  "steps": [],
+  "metadata": {
+    "source": "chat_api"
+  }
+}

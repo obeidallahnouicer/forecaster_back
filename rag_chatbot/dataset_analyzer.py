@@ -60,14 +60,56 @@ class DatasetAnalyzer:
     
     def _validate_columns(self):
         """Ensure critical columns are present."""
+        # Canonical required columns used by the analysis pipeline
         required = ["ref_article", "avg_forecast", "trend_pct", "trend_label", "data_points"]
-        missing = [c for c in required if c.lower() not in [x.lower() for x in self.df.columns]]
-        
+
+        # Build a simple normalization map of common variant headers to canonical names.
+        # This helps handle CSVs with different naming conventions (e.g., 'Ref Article', 'CA HT NET').
+        variants_map = {
+            "ref_article": ["ref_article", "ref article", "ref-article", "reference", "article_ref", "ref"],
+            "avg_forecast": ["avg_forecast", "avg forecast", "ca ht net", "ca_ht_net", "ca_ht", "forecast", "forecast_next_year", "next_year"],
+            "trend_pct": ["trend_pct", "trend pct", "trend%", "trend_percent", "pct_change", "trend"],
+            "trend_label": ["trend_label", "trend label", "trend_class", "trend_label_clean"],
+            "data_points": ["data_points", "data points", "n_points", "count", "observations", "num_points"],
+        }
+
+        # Lowercase current columns for matching while preserving original names for renaming
+        orig_cols = list(self.df.columns)
+        lowered = [c.lower().strip() for c in orig_cols]
+
+        rename_map = {}
+        for canon, variants in variants_map.items():
+            for v in variants:
+                if v in lowered:
+                    # find original column name that matches this lowered token
+                    idx = lowered.index(v)
+                    original_name = orig_cols[idx]
+                    # Only rename if original differs from canonical to avoid unnecessary ops
+                    if original_name != canon:
+                        rename_map[original_name] = canon
+                    break
+
+        if rename_map:
+            try:
+                self.df = self.df.rename(columns=rename_map)
+                logger.info(f"Normalized dataset columns using mapping: {rename_map}")
+                # Refresh orig_cols/lowered after rename
+                orig_cols = list(self.df.columns)
+                lowered = [c.lower().strip() for c in orig_cols]
+            except Exception:
+                logger.exception("Failed to rename dataset columns during normalization")
+
+        # Normalize column names to lowercase for consistent access throughout the analyzer
+        try:
+            self.df.columns = [c.lower() for c in self.df.columns]
+        except Exception:
+            # If column normalization fails, surface it — callers expect analyzer.df to be usable
+            logger.exception("Failed to normalize DataFrame column names to lowercase")
+
+        # Compute missing required columns after normalization
+        missing = [c for c in required if c not in [x.lower() for x in self.df.columns]]
         if missing:
             logger.warning(f"Missing columns: {missing}. Working with available columns.")
-        
-        # Normalize column names to lowercase for consistent access
-        self.df.columns = [c.lower() for c in self.df.columns]
     
     def get_all_products(self) -> pd.DataFrame:
         """Return all products in the dataset."""
@@ -109,28 +151,57 @@ class DatasetAnalyzer:
         if "trend_pct" not in self.df.columns or "ref_article" not in self.df.columns:
             return None
         
-        # Filter out NaN values and products with very few data points
+        # Filter out NaN trend_pct values and work on a copy
         df_valid = self.df[self.df["trend_pct"].notna()].copy()
-        
+
         if df_valid.empty:
             return None
-        
-        # Prefer products with more data points (at least MIN_DATA_POINTS_FOR_RELIABILITY) for higher confidence
-        df_reliable = df_valid[df_valid.get("data_points", 0) >= MIN_DATA_POINTS_FOR_RELIABILITY].copy()
-        
+
+        # Coerce numeric columns to proper types to avoid unexpected comparisons
+        try:
+            df_valid["trend_pct"] = pd.to_numeric(df_valid["trend_pct"], errors="coerce")
+        except Exception:
+            logger.debug("Could not coerce 'trend_pct' to numeric; leaving as-is")
+
+        if "data_points" in df_valid.columns:
+            # convert to integer, fill NaN with 0
+            df_valid["data_points"] = pd.to_numeric(df_valid["data_points"], errors="coerce").fillna(0).astype(int)
+        else:
+            # If the column is missing, create it as zeros so comparisons behave deterministically
+            df_valid["data_points"] = 0
+
+        # Primary: products with at least MIN_DATA_POINTS_FOR_RELIABILITY
+        df_reliable = df_valid[df_valid["data_points"] >= MIN_DATA_POINTS_FOR_RELIABILITY].copy()
+
+        # Do NOT fallback to lower-data candidates. If no reliable products are available,
+        # refuse to pick a most-stable product to avoid making decisions from insufficient data.
         if df_reliable.empty:
-            # Fallback to all products if none have enough data points
-            df_reliable = df_valid.copy()
-        
-        # Find row with smallest absolute trend_pct
+            logger.warning(
+                "No products meet MIN_DATA_POINTS_FOR_RELIABILITY for reliable stability selection; returning None"
+            )
+            return None
+
+        # Compute absolute trend for ranking and apply tie-breakers: prefer more data points, then larger avg_forecast
         df_reliable["abs_trend"] = df_reliable["trend_pct"].abs()
-        idx = df_reliable["abs_trend"].idxmin()
-        row = df_reliable.loc[idx]
-        
+
+        # Ensure avg_forecast exists and is numeric for tie-breaker
+        if "avg_forecast" in df_reliable.columns:
+            df_reliable["avg_forecast"] = pd.to_numeric(df_reliable["avg_forecast"], errors="coerce").fillna(0)
+        else:
+            df_reliable["avg_forecast"] = 0
+
+        # Sort by abs_trend asc (most stable), data_points desc (more reliable), avg_forecast desc
+        df_sorted = df_reliable.sort_values(by=["abs_trend", "data_points", "avg_forecast"], ascending=[True, False, False])
+
+        if df_sorted.empty:
+            return None
+
+        row = df_sorted.iloc[0]
+
         return {
             "product": row["ref_article"],
             "avg_forecast": float(row.get("avg_forecast", 0)),
-            "trend_pct": float(row["trend_pct"]),
+            "trend_pct": float(row.get("trend_pct", 0)),
             "trend_label": row.get("trend_label", "Unknown"),
             "data_points": int(row.get("data_points", 0)),
             "designation": row.get("designation", ""),
@@ -148,43 +219,51 @@ class DatasetAnalyzer:
         """
         if "avg_forecast" not in self.df.columns or "ref_article" not in self.df.columns:
             return None
-        
+
         df_valid = self.df[self.df["avg_forecast"].notna()].copy()
-        
+
         if df_valid.empty:
             return None
-        
+
+        # Candidates must meet minimum data-point reliability to be considered for removal.
+        df_candidates = df_valid[df_valid.get("data_points", 0) >= MIN_DATA_POINTS_FOR_RELIABILITY].copy()
+        if df_candidates.empty:
+            logger.warning(
+                "No products meet MIN_DATA_POINTS_FOR_RELIABILITY for low-performing selection; returning None"
+            )
+            return None
+
         # Score products: lower avg_forecast, negative trend, fewer data points
-        df_valid["downtrend"] = 0
-        if "trend_pct" in df_valid.columns:
-            df_valid["downtrend"] = df_valid["downtrend"] + (df_valid["trend_pct"] < 0).astype(int) * 10
-        if "trend_label" in df_valid.columns:
-            df_valid["downtrend"] = df_valid["downtrend"] + (df_valid["trend_label"].str.lower() == "downtrend").astype(int) * 5
-        
-        df_valid["few_datapoints"] = 0
-        if "data_points" in df_valid.columns:
-            df_valid["few_datapoints"] = (df_valid["data_points"] < FEW_DATA_POINTS_THRESHOLD).astype(int) * 3
-        
+        df_candidates["downtrend"] = 0
+        if "trend_pct" in df_candidates.columns:
+            df_candidates["downtrend"] = df_candidates["downtrend"] + (df_candidates["trend_pct"] < 0).astype(int) * 10
+        if "trend_label" in df_candidates.columns:
+            df_candidates["downtrend"] = df_candidates["downtrend"] + (df_candidates["trend_label"].str.lower() == "downtrend").astype(int) * 5
+
+        df_candidates["few_datapoints"] = 0
+        if "data_points" in df_candidates.columns:
+            df_candidates["few_datapoints"] = (df_candidates["data_points"] < FEW_DATA_POINTS_THRESHOLD).astype(int) * 3
+
         # Normalize avg_forecast and create score
-        min_forecast = df_valid["avg_forecast"].min()
-        max_forecast = df_valid["avg_forecast"].max()
+        min_forecast = df_candidates["avg_forecast"].min()
+        max_forecast = df_candidates["avg_forecast"].max()
         if max_forecast > min_forecast:
-            df_valid["forecast_score"] = (
-                (max_forecast - df_valid["avg_forecast"]) / (max_forecast - min_forecast) * 100
+            df_candidates["forecast_score"] = (
+                (max_forecast - df_candidates["avg_forecast"]) / (max_forecast - min_forecast) * 100
             )
         else:
-            df_valid["forecast_score"] = 0
-        
-        df_valid["total_score"] = (
-            df_valid["forecast_score"] * 0.5 +
-            df_valid["downtrend"] * 0.3 +
-            df_valid["few_datapoints"] * 0.2
+            df_candidates["forecast_score"] = 0
+
+        df_candidates["total_score"] = (
+            df_candidates["forecast_score"] * 0.5 +
+            df_candidates["downtrend"] * 0.3 +
+            df_candidates["few_datapoints"] * 0.2
         )
-        
+
         # Find worst
-        idx = df_valid["total_score"].idxmax()
-        row = df_valid.loc[idx]
-        
+        idx = df_candidates["total_score"].idxmax()
+        row = df_candidates.loc[idx]
+
         return {
             "product": row["ref_article"],
             "avg_forecast": float(row.get("avg_forecast", 0)),
@@ -328,7 +407,57 @@ def get_analyzer(df: Optional[pd.DataFrame] = None) -> DatasetAnalyzer:
     
     with _analyzer_lock:
         if _analyzer is None:
-            _analyzer = DatasetAnalyzer(df)
+            # If caller didn't provide a DataFrame, prefer any uploaded server files in server_data/
+            if df is None:
+                repo_root = Path(__file__).resolve().parent.parent
+                # If forced to use repo-level summary, load that only
+                try:
+                    from . import config as _cfg
+                except Exception:
+                    _cfg = None
+
+                if _cfg and getattr(_cfg, 'FORCE_REPO_SUMMARY', False):
+                    fallback = repo_root / "forecast-summary.csv"
+                    if fallback.exists():
+                        logger.info(f"FORCE_REPO_SUMMARY enabled: loading {fallback}")
+                        df_try = data_loader.load_and_preprocess(path=fallback)
+                        _analyzer = DatasetAnalyzer(df_try)
+                    else:
+                        raise FileNotFoundError("FORCE_REPO_SUMMARY is set but forecast-summary.csv not found at repo root")
+                else:
+                    # 1) Check for server-side uploads (server_data/<session_id>/*)
+                    server_dir = repo_root / "server_data"
+                    try:
+                        if server_dir.exists() and any(server_dir.iterdir()):
+                            # Find newest file under server_data (csv/xlsx)
+                            candidates = list(server_dir.glob("**/*.*"))
+                            candidates = [p for p in candidates if p.suffix.lower() in ('.csv', '.xlsx', '.xls')]
+                            if candidates:
+                                newest = max(candidates, key=lambda p: p.stat().st_mtime)
+                                logger.info(f"Initializing DatasetAnalyzer from latest uploaded file: {newest}")
+                                df_try = data_loader.load_and_preprocess(path=newest)
+                                _analyzer = DatasetAnalyzer(df_try)
+                            else:
+                                raise FileNotFoundError("No uploaded CSV/XLSX files found under server_data")
+                        else:
+                            raise FileNotFoundError("server_data directory missing or empty")
+                    except Exception:
+                        # 2) Fallback to repo-root forecast-summary.csv
+                        try:
+                            fallback = repo_root / "forecast-summary.csv"
+                            if fallback.exists():
+                                logger.info(f"Falling back to repo-root forecast-summary.csv: {fallback}")
+                                df_try = data_loader.load_and_preprocess(path=fallback)
+                                _analyzer = DatasetAnalyzer(df_try)
+                            else:
+                                # 3) Finally try configured DATA_PATH via default DatasetAnalyzer init
+                                logger.info("No uploaded file or repo-level forecast-summary.csv found; using config.DATA_PATH")
+                                _analyzer = DatasetAnalyzer(None)
+                        except Exception:
+                            logger.exception("Unable to create DatasetAnalyzer from server_data, repo fallback, or config.DATA_PATH")
+                            _analyzer = DatasetAnalyzer(None)
+            else:
+                _analyzer = DatasetAnalyzer(df)
         return _analyzer
 
 

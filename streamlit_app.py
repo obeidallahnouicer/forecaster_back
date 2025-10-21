@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 # Import your forecaster
-from sales_forecaster2 import SalesForecaster
+from sales_forecaster import SalesForecaster
 
 # Page configuration
 st.set_page_config(
