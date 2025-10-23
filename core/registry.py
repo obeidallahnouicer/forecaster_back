@@ -79,6 +79,19 @@ class ForecastRegistry:
                 status="ready"
             )
 
+            # Attempt to instantiate a SalesForecaster for convenience so
+            # API callers can immediately use info.forecaster methods.
+            try:
+                # Import locally to avoid top-level import cycles
+                from sales_forecaster import SalesForecaster
+                forecaster = SalesForecaster(df, cache_dir=str(self.cache_dir), frequency=frequency)
+                session_info.forecaster = forecaster
+            except Exception:
+                # Don't fail session creation if the forecaster can't be instantiated;
+                # keep forecaster as None but log the problem so callers get a clearer
+                # error later and session metadata is still available.
+                logger.exception("Failed to instantiate SalesForecaster for session %s", session_id)
+
             self.sessions[session_id] = session_info
             logger.info(f"Created forecast session {session_id}")
 
