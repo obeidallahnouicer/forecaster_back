@@ -1,433 +1,821 @@
-# Sales Forecasting Backend - Complete Index
+# Sales Forecaster & Business Intelligence API# Sales Forecaster & Business Intelligence API - LangChain + Guardrails Edition
 
-## 📚 Documentation Index
 
-### Quick References
-| Document | Purpose | Read Time |
-|----------|---------|-----------|
-| **[QUICK_START.md](QUICK_START.md)** | Get up and running in 30 seconds | 5 min |
-| **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** | What was built and why | 10 min |
-| **[TEST_RESULTS.md](TEST_RESULTS.md)** | Test validation report (6/6 passing) | 10 min |
-| **[USAGE_GUIDE.md](USAGE_GUIDE.md)** | Complete reference guide | 30 min |
 
----
+**Version 5.0.0** - Strict Validation Pipeline with LangChain + Guardrails AI**Version 4.0.0** - Production-ready with LangChain orchestration and Guardrails AI safety
 
-## 🚀 Getting Started (2 minutes)
 
-### Option 1: Streamlit Dashboard (Easiest)
-```bash
-cd c:\Users\onouicer\Desktop\slimback\forecaster_back
-pip install -r requirements.txt
-streamlit run streamlit_app.py
-```
-Then open `http://localhost:8501` in your browser.
 
-### Option 2: FastAPI Backend (For Integration)
-```bash
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-Then make requests to `http://localhost:8000/api/...`
+## 🎯 Overview## 🎯 Overview
 
-### Option 3: Programmatic (For Scripts)
-```python
-from sales_forecaster import SalesForecaster
-import pandas as pd
 
-df = pd.read_csv("sales.csv")
-forecaster = SalesForecaster(df, frequency="yearly")
-forecaster.clean_data()
-forecaster.prepare_data()
-results = forecaster.forecast_all_articles()
-results.to_csv("forecasts.csv", index=False)
-```
+
+Production-ready FastAPI backend featuring a **SQL chatbot with strict validation** and **sales forecasting**.A FastAPI-based business intelligence system with two core capabilities:
+
+
+
+**Core Capabilities**:1. **Text-to-SQL Chatbot** - Natural language to SQL using LangChain chains with Guardrails AI safety
+
+1. **SQL Chatbot** - Natural language → Validated SQL → Insights (LangChain + Guardrails AI)2. **Sales Forecasting** - Upload sales data, generate forecasts with multiple ML models
+
+2. **Sales Forecasting** - Time series predictions with Prophet
+
+**Architecture**: LangChain + Groq (LLaMA 3.3 70B) + Guardrails AI for safety
+
+**Technology Stack**:
+
+- **LangChain**: Orchestration and prompt management**Key Features**:
+
+- **Groq**: Llama 3.3 70B inference (fast, scalable)- 🔗 **LangChain Integration**: Modular prompt templates and composable chains
+
+- **Guardrails AI**: Input/output validation for safety- 🛡️ **Guardrails AI**: SQL injection prevention, PII detection/masking, syntax validation
+
+- **FastAPI**: High-performance API framework- 🚀 **Groq LLM**: Fast inference with LLaMA 3.3 70B
+
+- 📊 **Data-Driven**: Direct SQL on structured data (no RAG overhead)
 
 ---
 
-## 📁 Project Structure
+---
+
+## 🛡️ Strict Validation Pipeline
+
+## 🚀 Quick Start
+
+Every user query flows through a **5-stage validation pipeline** with **NO bypass logic**:
+
+### Installation
+
+```
+
+┌────────────────────────────────────────────────────────────────┐```bash
+
+│  STAGE 1: INPUT VALIDATION (PII Detector)                      │# Install dependencies
+
+│  ────────────────────────────────────────────────────────────  │pip install -r requirements.txt
+
+│  Purpose: Detect PII/sensitive data in user input              │
+
+│  Action:  ✓ PASS → Continue to LLM                             │# Set Groq API key
+
+│           ✗ FAIL → REJECT immediately (log & return error)     │export GROQ_API_KEY=your_api_key_here
+
+│  Checks:  Email, phone, SSN, credit card, sensitive keywords   │
+
+└────────────────────────────────────────────────────────────────┘# Run server
+
+                              ↓python main.py
+
+┌────────────────────────────────────────────────────────────────┐```
+
+│  STAGE 2: LLM GENERATION (LangChain + Groq)                    │
+
+│  ────────────────────────────────────────────────────────────  │Server starts at `http://localhost:8000`
+
+│  Purpose: Generate SQL from natural language                   │- API Docs: `http://localhost:8000/docs`
+
+│  Action:  ✓ SUCCESS → Continue to validation                   │- Health: `http://localhost:8000/health`
+
+│           ✗ FAILURE → REJECT (return error to user)            │
+
+│  Model:   Groq Llama 3.3 70B (via LangChain)                   │---
+
+└────────────────────────────────────────────────────────────────┘
+
+                              ↓## 📡 API Endpoints
+
+┌────────────────────────────────────────────────────────────────┐
+
+│  STAGE 3: OUTPUT VALIDATION (SQL Validator)                    │### 🤖 Text-to-SQL Chatbot
+
+│  ────────────────────────────────────────────────────────────  │
+
+│  Purpose: Validate generated SQL for safety and correctness    │#### **POST /api/sql-chat**
+
+│  Action:  ✓ PASS → Continue to execution                       │Ask natural language questions about your data.
+
+│           ✗ FAIL → REJECT (do NOT execute SQL, return error)   │
+
+│  Checks:  Syntax, SQL injection, forbidden operations, logic   │**Request:**
+
+└────────────────────────────────────────────────────────────────┘```json
+
+                              ↓{
+
+┌────────────────────────────────────────────────────────────────┐  "question": "What are the top 5 products by total sales?",
+
+│  STAGE 4: EXECUTION (Executor Agent)                           │  "session_id": "user_123",
+
+│  ────────────────────────────────────────────────────────────  │  "enforce_limit": true
+
+│  Purpose: Execute validated SQL (read-only)                    │}
+
+│  Action:  ✓ SUCCESS → Continue to insights                     │```
+
+│           ✗ FAILURE → REJECT (return execution error)          │
+
+│  Safety:  Only executes pre-validated queries                  │**Response:**
+
+└────────────────────────────────────────────────────────────────┘```json
+
+                              ↓{
+
+┌────────────────────────────────────────────────────────────────┐  "success": true,
+
+│  STAGE 5: INSIGHTS (Insight Agent)                             │  "question": "What are the top 5 products by total sales?",
+
+│  ────────────────────────────────────────────────────────────  │  "sql": "SELECT CODE_PRODUIT, SUM(CA) as total_ca FROM t_ventes_cleann GROUP BY CODE_PRODUIT ORDER BY total_ca DESC LIMIT 5",
+
+│  Purpose: Analyze results and generate recommendations         │  "params": [],
+
+│  Action:  Return summary, insights, recommendations            │  "columns": ["CODE_PRODUIT", "total_ca"],
+
+│  Method:  LangChain chain with analysis prompt                 │  "rows": [...],
+
+└────────────────────────────────────────────────────────────────┘  "insights": {
+
+```    "total_rows": 5,
+
+    "numeric_summary": {...},
+
+### Safety Guarantees    "key_insights": ["Top product generates 45% of total revenue"],
+
+    "recommendations": ["Focus on top 3 products for growth"]
+
+✅ **No PII sent to LLM** - Blocked at input validation    },
+
+✅ **No SQL injection** - All SQL validated before execution    "confidence": 0.95,
+
+✅ **Only SELECT queries** - Forbidden operations (DROP, DELETE, etc.) blocked    "metadata": {...}
+
+✅ **No invalid SQL executed** - Syntax and structure validated  }
+
+✅ **Fail-fast behavior** - Any validation failure stops workflow immediately```
+
+
+
+------
+
+
+
+## 🚀 Quick Start## 🏗️ Architecture
+
+
+
+### Prerequisites### Clean Folder Structure
+
+
+
+- Python 3.9+```
+
+- Groq API key ([get one here](https://console.groq.com/))forecaster_back/
+
+├── agents/                    # LangChain-powered agents
+
+### Installation│   ├── query_agent.py        # NL → SQL using LangChain
+
+│   ├── sql_validator.py      # Guardrails SQL validation
+
+```bash│   ├── executor_agent.py     # Query execution + PII masking
+
+# Clone repository│   └── insight_agent.py      # LangChain insights generation
+
+git clone <repo-url>├── guardrails/                # Guardrails AI safety modules
+
+cd forecaster_back│   ├── sql_validator.py      # Comprehensive SQL validation
+
+│   ├── injection_detector.py # SQL injection prevention
+
+# Install dependencies│   └── pii_detector.py       # PII detection and masking
+
+pip install -r requirements.txt├── prompts/                   # Modular LangChain prompt templates
+
+│   ├── sql_generation.py     # SQL generation prompts
+
+# Set environment variables│   ├── insight_generation.py # Insight analysis prompts
+
+export GROQ_API_KEY=your_api_key_here│   └── validation.py         # Validation prompts
+
+├── api/
+
+# Run server│   └── routers/
+
+python main.py│       ├── sql_chat.py       # Text-to-SQL endpoint
+
+```│       ├── forecasts.py      # Forecast endpoints
+
+│       └── dashboard.py      # Dashboard metrics
+
+Server starts at `http://localhost:8000`├── core/
+
+│   ├── config.py             # Configuration (LangChain + Guardrails)
+
+**Important URLs**:│   ├── db_connection.py      # In-memory SQLite loader
+
+- API Documentation: `http://localhost:8000/docs`│   ├── schema_loader.py      # DB schema introspection
+
+- Health Check: `http://localhost:8000/health`│   └── registry.py           # Forecast session registry
+
+- Validation Info: `http://localhost:8000/api/sql-chat/validation-info`├── llm/
+
+│   ├── client.py             # Groq LLM wrapper (legacy)
+
+---│   └── token_manager.py      # Token tracking
+
+├── tests/
+
+## 📡 API Endpoints│   └── test_sql_chat.py      # Integration tests
+
+├── main.py                    # FastAPI application
+
+### 🤖 SQL Chatbot└── requirements.txt           # Dependencies (includes LangChain)
+
+```
+
+#### **POST /api/sql-chat**
+
+### Text-to-SQL Workflow
+
+Ask natural language questions about your data with strict validation.
+
+```
+
+**Request:**User Question
+
+```json    ↓
+
+{[Query Agent - LangChain] → Generate SQL with structured output
+
+  "question": "Show me total sales by month in 2024",    ↓
+
+  "session_id": "user_123"  // optional[SQL Validator - Guardrails] → Validate syntax, prevent injection
+
+}    ↓
+
+```[Injection Detector - Guardrails] → Advanced injection detection
+
+    ↓
+
+**Response (Success):**[Executor Agent] → Execute query + mask PII
+
+```json    ↓
+
+{[PII Detector - Guardrails] → Detect and mask sensitive data
+
+  "success": true,    ↓
+
+  "question": "Show me total sales by month in 2024",[Insight Agent - LangChain] → Analyze results + generate insights
+
+  "answer": "Analysis of monthly sales for 2024 shows...",    ↓
+
+  "sql": "SELECT strftime('%Y-%m', Date) as month, SUM(Montant) as total FROM t_base WHERE strftime('%Y', Date) = '2024' GROUP BY month",JSON Response (SQL + masked data + insights)
+
+  "insights": [```
+
+    "12 months of data analyzed",
+
+    "Total sales: $1.2M",---
+
+    "Peak month: December ($150K)"
+
+  ],## 🧪 Testing
+
+  "recommendations": [
+
+    "Focus marketing efforts on Q4",```bash
+
+    "Investigate Q1 dip"# Run all tests
+
+  ],pytest
+
+  "rows_preview": [
+
+    {"month": "2024-01", "total": 95000},# Run SQL chat tests only
+
+    {"month": "2024-02", "total": 87000}pytest tests/test_sql_chat.py -v
+
+  ],
+
+  "rowcount": 12,# Test with coverage
+
+  "execution_time_ms": 245.3,pytest --cov=agents --cov=api --cov=core
+
+  "validation_status": {```
+
+    "input_validation": "passed",
+
+    "llm_generation": "passed",**Current Test Status**: ✅ All 5 tests passing
+
+    "output_validation": "passed",
+
+    "execution": "passed",---
+
+    "insights": "passed"
+
+  }## 🎯 Design Principles
+
+}
+
+```1. **LangChain First**: All LLM interactions use LangChain chains for maintainability
+
+2. **Safety by Default**: Guardrails AI validates every SQL query before execution
+
+**Response (Validation Failure):**3. **PII Protection**: Automatic detection and masking of sensitive data
+
+```json4. **Data-Driven**: All insights come from actual data, not hallucinations
+
+{5. **SQL-First**: Direct SQL queries on structured data (no RAG overhead)
+
+  "success": false,6. **Modular Prompts**: Reusable prompt templates in dedicated folder
+
+  "question": "Show me john.doe@email.com purchases",7. **Testable**: Clear separation of concerns for easy testing
+
+  "error": "INPUT REJECTED: PII or sensitive data detected (email). Please rephrase your query without including personal information.",
+
+  "execution_time_ms": 12.5,---
+
+  "validation_status": {
+
+    "input_validation": "failed",## 📦 Data Sources
+
+    "llm_generation": "not_started",
+
+    "output_validation": "not_started",The system auto-loads CSV/Excel files from the root directory into in-memory SQLite:
+
+    "execution": "not_started",
+
+    "insights": "not_started"- `BASE.xlsx` → `t_base`
+
+  }- `STOCK.xlsx` → `t_stock`
+
+}- `ventes_cleann.csv` → `t_ventes_cleann`
+
+```- `forecast-summary.csv` → `t_forecast_summary`
+
+
+
+#### **GET /api/sql-chat/health**Schema is dynamically introspected and provided to the LLM for SQL generation.
+
+
+
+Check service health and configuration.---
+
+
+
+**Response:**## 🔑 Environment Variables
+
+```json
+
+{```bash
+
+  "status": "healthy",# Required
+
+  "service": "sql-chat",GROQ_API_KEY=your_groq_api_key
+
+  "pipeline": "LangChain + Guardrails AI",
+
+  "llm": "llama-3.3-70b-versatile",# Optional (with defaults)
+
+  "validation": {HOST=0.0.0.0
+
+    "input_validator": "PIIInputValidator",PORT=8000
+
+    "output_validator": "SQLOutputValidator"LOG_LEVEL=INFO
+
+  }DEBUG=False
+
+}GROQ_MODEL=llama-3.3-70b-versatile
+
+```GROQ_RPM=30
+
+
+
+#### **GET /api/sql-chat/validation-info**# Guardrails AI Settings
+
+ENABLE_PII_MASKING=true
+
+Get detailed information about the validation pipeline.SQL_MAX_QUERY_LENGTH=5000
+
+SQL_ENFORCE_LIMIT=1000
+
+**Response:**GUARDRAILS_LOG_VIOLATIONS=true
+
+```json```
+
+{
+
+  "pipeline": {---
+
+    "1_input_validation": {
+
+      "purpose": "Check for PII/sensitive data in user input",## 📝 Example Questions
+
+      "action_on_fail": "REJECT - Do not proceed to LLM",
+
+      "validator": "PIIInputValidator",**Sales Analysis:**
+
+      "checks": ["email", "phone", "ssn", "credit_card", "sensitive_keywords"]- "What are the top 10 products by revenue?"
+
+    },- "Show me total CA grouped by month"
+
+    "2_llm_generation": {...},- "Which clients have purchased in the last 3 months?"
+
+    "3_output_validation": {...},
+
+    "4_execution": {...},**Stock Analysis:**
+
+    "5_insights": {...}- "List products with stock below 100 units"
+
+  },- "Show stock coverage by product category"
+
+  "safety_guarantees": [
+
+    "No PII/sensitive data sent to LLM",**Trends:**
+
+    "No invalid SQL executed",- "What's the year-over-year revenue growth?"
+
+    ...- "Show monthly sales trends for 2024"
+
+  ]
+
+}---
+
+```
+
+## 🔄 Migration from v3.x
+
+---
+
+**Removed:**
+
+### 📈 Sales Forecasting- Direct LLM client calls (replaced with LangChain chains)
+
+- Old RAG workflow (embeddings, ChromaDB, vectorstore)
+
+#### **POST /api/forecasts/upload**- Hardcoded prompts (moved to `prompts/` folder)
+
+- Basic SQL validation (upgraded to Guardrails AI)
+
+Upload sales data for forecasting.
+
+**Added:**
+
+**Request:** `multipart/form-data` with CSV file- LangChain integration for all LLM interactions
+
+- Guardrails AI for comprehensive safety:
+
+**Response:**  - SQL syntax validation
+
+```json  - SQL injection prevention
+
+{  - PII detection and masking
+
+  "success": true,- Modular prompt templates
+
+  "message": "Data uploaded successfully",- Enhanced error handling and logging
+
+  "rows": 1000,- PII masking in query results
+
+  "columns": ["Date", "Product", "Sales"]
+
+}**Upgrade Steps:**
+
+```1. Install new dependencies: `pip install -r requirements.txt`
+
+2. Set `GROQ_API_KEY` environment variable
+
+#### **POST /api/forecasts/generate**3. Optional: Configure Guardrails settings (see Environment Variables)
+
+4. Test with `/health` endpoint to verify setup
+
+Generate forecast for uploaded data.
+
+---
+
+**Request:**
+
+```json## 📞 Support
+
+{
+
+  "periods": 30,  // days to forecastFor issues or questions, check `/docs` or review `tests/test_sql_chat.py`.
+
+  "model": "prophet"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "forecast": [
+    {"ds": "2024-11-01", "yhat": 15000, "yhat_lower": 13500, "yhat_upper": 16500},
+    ...
+  ],
+  "metrics": {
+    "mae": 250.5,
+    "rmse": 320.8
+  }
+}
+```
+
+---
+
+## 🏗️ Project Structure
 
 ```
 forecaster_back/
+├── agents/                      # LangChain agents
+│   ├── query_agent.py          # SQL generation with validation
+│   ├── executor_agent.py       # Validated SQL execution
+│   └── insight_agent.py        # Result analysis with LangChain
 │
-├── 📄 QUICK_START.md                    ← START HERE!
-├── 📄 IMPLEMENTATION_SUMMARY.md          ← What was built
-├── 📄 TEST_RESULTS.md                   ← Validation (6/6 ✅)
-├── 📄 USAGE_GUIDE.md                    ← Complete reference
+├── guardrails/                  # Guardrails AI validators
+│   ├── pii_detector.py         # INPUT validator (PII check)
+│   └── sql_validator.py        # OUTPUT validator (SQL check)
 │
-├── 🐍 Core Engine
-│   ├── sales_forecaster.py              ← Main forecasting class
-│   ├── streamlit_app.py                 ← Interactive dashboard
-│   └── test_integration.py              ← Test suite (6/6 PASS)
+├── prompts/                     # Modular prompt templates
+│   ├── sql_generation.txt      # SQL generation prompt
+│   ├── sql_validation.txt      # SQL validation prompt
+│   └── insight_generation.txt  # Analysis prompt
 │
-├── 📦 Backend API
-│   ├── app/
-│   │   ├── main.py                      ← FastAPI app
-│   │   ├── schemas.py                   ← Data models
-│   │   ├── core/registry.py             ← Session manager
-│   │   └── api/routers/
-│   │       ├── forecasts.py             ← Forecast endpoints
-│   │       └── dashboard.py             ← Dashboard endpoints
-│   │
-│   ├── rag_chatbot/                     ← AI chatbot (optional)
-│   └── scripts/                         ← Utility scripts
+├── api/
+│   └── routers/
+│       ├── sql_chat.py         # SQL chatbot endpoints
+│       └── forecasts.py        # Forecasting endpoints
 │
-├── 💾 Data & Cache
-│   ├── cache/                           ← Forecast cache
-│   ├── server_data/                     ← Session storage
-│   ├── forecast-summary.csv             ← Export results
-│   └── BASE.xlsx, chatbotdf.csv         ← Sample data
+├── core/
+│   ├── config.py               # Configuration
+│   ├── db_connection.py        # Database connection
+│   └── schema_loader.py        # Schema extraction
 │
-├── 📋 Configuration
-│   ├── requirements.txt                 ← Dependencies
-│   └── .env (optional)                  ← Environment config
+├── llm/
+│   ├── client.py               # Groq LLM client
+│   └── token_manager.py        # Token usage tracking
 │
-└── 🧪 Tests
-    └── tests/                           ← Unit tests
+├── main.py                      # FastAPI application
+├── requirements.txt             # Dependencies
+└── README.md                    # This file
 ```
-
----
-
-## 🎯 Core Features
-
-### Forecasting Methods
-```
-├── Simple Moving Average (SMA)
-├── Exponential Smoothing
-├── Linear Regression
-├── ARIMA (if statsmodels installed)
-├── Prophet (if prophet installed)
-└── XGBoost (if xgboost installed)
-```
-
-### Frequency Support
-- **Yearly:** Full year aggregation with `Année` column
-- **Monthly:** Month-level granularity with `Date` column
-
-### Performance Metrics
-- MAE (Mean Absolute Error)
-- MSE (Mean Squared Error)
-- RMSE (Root Mean Squared Error)
-- MAPE (Mean Absolute Percentage Error)
-- R² (Coefficient of Determination)
-
-### Smart Features
-- ✅ Ensemble averaging across methods
-- ✅ Automatic fast mode for small datasets
-- ✅ Trend classification (Uptrend/Downtrend/Stable)
-- ✅ Per-article caching with cache invalidation
-- ✅ Shared cache for identical uploads
-- ✅ JSON serialization for API responses
-
----
-
-## 📊 Data Format
-
-### Required Columns
-```csv
-Ref Article,Année,CA HT NET
-ART001,2023,15000.00
-ART002,2023,22000.00
-```
-
-### Optional Columns
-```csv
-Designation,Marque,Famille,Sous Famille
-Product A,Brand X,Electronics,Computers
-```
-
----
-
-## 🔗 Integration Points
-
-### Streamlit Dashboard
-- 📈 Forecast All - Batch forecasting
-- 🔍 Single Article - Detailed view
-- 📊 Summary - Statistics & trends
-- 📋 Data Preview - Data inspection
-- 📥 Export - Download CSV
-
-### FastAPI Backend
-- `POST /api/upload` - Upload file
-- `POST /api/forecast-article` - Single forecast
-- `POST /api/forecast-all` - Batch forecast
-- `GET /api/documents` - Get with filters
-- `GET /api/metrics` - Aggregated stats
-- `GET /api/articles` - List articles
-
-### RAG Chatbot
-- Integration with vector store
-- Forecast context for Q&A
-- `/api/chat` endpoint
-
----
-
-## 📈 Usage Examples
-
-### Example 1: Dashboard
-```bash
-streamlit run streamlit_app.py
-# Open http://localhost:8501
-# Upload CSV → Configure → Run → View → Export
-```
-
-### Example 2: API
-```bash
-# Terminal 1
-python -m uvicorn app.main:app
-
-# Terminal 2
-curl -F "file=@sales.csv" http://localhost:8000/api/upload
-# Returns: {"session_id": "uuid", "rows": 1000}
-
-curl -X POST http://localhost:8000/api/forecast-all \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "uuid"}'
-```
-
-### Example 3: Python Script
-```python
-from sales_forecaster import SalesForecaster
-import pandas as pd
-
-# Load
-df = pd.read_csv("sales.csv")
-
-# Initialize
-f = SalesForecaster(df, frequency="yearly")
-f.clean_data()
-f.prepare_data()
-
-# Forecast
-results = f.forecast_all_articles(
-    period=3,
-    alpha=0.3,
-    include_methods=['SMA', 'LinearReg', 'ARIMA', 'XGBOOST']
-)
-
-# Analyze
-print(f"Total articles: {len(results)}")
-print(f"Top 5:")
-print(results.nlargest(5, 'avg_forecast')[['ref_article', 'avg_forecast']])
-
-# Export
-results.to_csv("forecasts.csv", index=False)
-```
-
----
-
-## ✅ Testing
-
-### Run Tests
-```bash
-$env:PYTHONIOENCODING="utf-8"
-python test_integration.py
-```
-
-### Expected Results
-```
-Test Summary
-============================================================
-✓ Yearly Forecasting: PASS
-✓ Monthly Forecasting: PASS
-✓ Metrics Calculation: PASS
-✓ Fast Mode: PASS
-✓ Trend Classification: PASS
-✓ Data Serialization: PASS
-
-Total: 6/6 passed ✓
-```
-
-### Coverage
-- ✅ All forecasting methods
-- ✅ Both time frequencies
-- ✅ Edge cases (small datasets, NaN values)
-- ✅ Cache operations
-- ✅ Data serialization
-- ✅ Metrics calculation
-- ✅ Trend classification
 
 ---
 
 ## 🔧 Configuration
 
 ### Environment Variables
-```bash
-# Model version (invalidates cache)
-export FORECAST_MODEL_VERSION=v2
 
-# Python encoding (for output)
-export PYTHONIOENCODING=utf-8
+```bash
+# Required
+GROQ_API_KEY=your_groq_api_key
+
+# Optional
+GROQ_MODEL=llama-3.3-70b-versatile  # Default
+DATABASE_PATH=./data/sales.db        # Default
+LOG_LEVEL=INFO                       # Default
 ```
 
-### Streamlit Settings (in code)
-- Forecasting frequency: yearly or monthly
-- Moving average period: 1-12
-- Exponential smoothing alpha: 0.1-0.9
-- Forecasting methods: Selectable
-- Fast mode: On/Off toggle
-- Force recompute: On/Off toggle
+### Guardrails Configuration
 
----
+Edit `core/config.py` to customize validation behavior:
 
-## 📚 Documentation Guide
-
-### For Quick Setup
-1. Read: **QUICK_START.md** (5 min)
-2. Run: `streamlit run streamlit_app.py`
-3. Upload data and start forecasting!
-
-### For Understanding Architecture
-1. Read: **IMPLEMENTATION_SUMMARY.md** (10 min)
-2. Review: Project structure above
-3. Explore: Code comments in main files
-
-### For Complete Reference
-1. Check: **USAGE_GUIDE.md** (30 min)
-2. See: API endpoints section
-3. Find: Troubleshooting section
-
-### For Validation
-1. Check: **TEST_RESULTS.md** (10 min)
-2. Run: `python test_integration.py`
-3. Verify: All 6 tests pass ✅
-
----
-
-## 🚨 Common Issues & Solutions
-
-| Issue | Solution |
-|-------|----------|
-| Module not found | `pip install -r requirements.txt` |
-| Port already in use | `streamlit run streamlit_app.py --server.port 8502` |
-| Date column not found | Ensure proper column names or adjust in sidebar |
-| Unicode errors | `$env:PYTHONIOENCODING="utf-8"` |
-| Slow first run | Normal - uses cache on subsequent runs |
-
----
-
-## 📊 Result Structure
-
-Each forecast includes:
 ```python
+class Config:
+    # PII Input Validation
+    PII_STRICT_MODE = True              # Reject on PII detection
+    
+    # SQL Output Validation
+    SQL_STRICT_MODE = True              # Reject on validation failure
+    SQL_ALLOW_SUBQUERIES = True         # Allow subqueries in SQL
+    
+    # LangChain
+    GROQ_MODEL = "llama-3.3-70b-versatile"
+    GROQ_TEMPERATURE = 0.1              # Low temp for deterministic output
+```
+
+---
+
+## 📚 Workflow Examples
+
+### Example 1: Successful Query
+
+```
+User Input: "Show me top 5 customers by total sales"
+
+1. INPUT VALIDATION:
+   ✓ No PII detected → PASS
+
+2. LLM GENERATION:
+   Generated SQL: SELECT Code_Client, SUM(Montant) as total 
+                  FROM t_base GROUP BY Code_Client 
+                  ORDER BY total DESC LIMIT 5
+   ✓ SQL generated → PASS
+
+3. OUTPUT VALIDATION:
+   ✓ Valid syntax → PASS
+   ✓ No injection patterns → PASS
+   ✓ Only SELECT → PASS
+   ✓ Valid structure → PASS
+
+4. EXECUTION:
+   ✓ Query executed → 5 rows returned
+
+5. INSIGHTS:
+   Summary: "Top 5 customers account for 35% of total revenue..."
+   Insights: ["Customer #123 is top performer", ...]
+   Recommendations: ["Focus retention on top customers"]
+
+Result: SUCCESS
+```
+
+### Example 2: PII Detected (Input Validation Failure)
+
+```
+User Input: "Show purchases for john.doe@company.com"
+
+1. INPUT VALIDATION:
+   ✗ PII detected (email) → FAIL
+
+Result: REJECTED
+Error: "INPUT REJECTED: PII or sensitive data detected (email). 
+        Please rephrase your query without including personal information."
+
+Pipeline stopped at Stage 1 - LLM never called.
+```
+
+### Example 3: SQL Injection Attempt (Output Validation Failure)
+
+```
+User Input: "Show all products; DROP TABLE t_base;"
+
+1. INPUT VALIDATION:
+   ✓ No PII → PASS
+
+2. LLM GENERATION:
+   (Hypothetically, LLM generates malicious SQL)
+   Generated SQL: SELECT * FROM products; DROP TABLE t_base;
+   ✓ SQL generated → PASS
+
+3. OUTPUT VALIDATION:
+   ✗ Multiple statements detected → FAIL
+   ✗ Forbidden operation (DROP) → FAIL
+
+Result: REJECTED
+Error: "SQL validation FAILED: Forbidden operation 'DROP' - only SELECT queries allowed"
+
+Pipeline stopped at Stage 3 - SQL never executed.
+```
+
+---
+
+## 🧪 Testing
+
+### Run Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run validation tests only
+pytest tests/test_validation.py
+
+# Run with coverage
+pytest --cov=guardrails --cov=agents
+```
+
+### Manual Testing
+
+```bash
+# Test PII detection
+curl -X POST http://localhost:8000/api/sql-chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me john@email.com orders"}'
+
+# Test valid query
+curl -X POST http://localhost:8000/api/sql-chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me total sales by month"}'
+
+# Get validation info
+curl http://localhost:8000/api/sql-chat/validation-info
+```
+
+---
+
+## 🔒 Security Features
+
+### Input Validation (PIIInputValidator)
+
+**Detected PII Types**:
+- Email addresses
+- Phone numbers
+- Social Security Numbers (SSN)
+- Credit card numbers
+- Passport numbers
+- IBAN codes
+
+**Sensitive Keywords**:
+- password, secret, credential, token
+- social security, credit card
+- personal information, confidential
+
+**Action**: Immediate rejection - no LLM call made
+
+### Output Validation (SQLOutputValidator)
+
+**Injection Patterns Blocked**:
+- Multiple statements (`;`)
+- Comment injection (`--`, `/**/`)
+- Union-based injection (`UNION SELECT`)
+- Boolean injection (`OR 1=1`)
+- Stored procedure calls (`xp_`, `sp_`)
+
+**Forbidden Operations**:
+- DROP, TRUNCATE, DELETE
+- INSERT, UPDATE, ALTER
+- CREATE, GRANT, REVOKE
+- EXEC, EXECUTE, SHUTDOWN
+
+**Action**: Rejection before execution - SQL never runs
+
+---
+
+## 📊 Monitoring & Logging
+
+### Logs
+
+Logs are written to:
+- `logs/agent_reasoning.log` - Agent decisions and reasoning
+- `logs/agent_errors.log` - Errors and validation failures
+
+### Validation Tracking
+
+Every request returns `validation_status` showing which stages passed/failed:
+
+```json
 {
-    'ref_article': 'ART001',
-    'next_period': 2024,              # or Period for monthly
-    'avg_forecast': 19500.00,         # Ensemble average
-    'trend_label': 'Uptrend',         # NEW: Trend classification
-    'sma_forecast': 19333.33,
-    'es_forecast': 19200.00,
-    'lr_forecast': 19400.00,
-    'arima_forecast': 19100.00,       # If available
-    'prophet_forecast': 19500.00,     # If available
-    'xgb_forecast': 19600.00,
-    'historical_periods': '[2021, 2022, 2023]',  # NEW: JSON
-    'historical_values': '[15000, 16500, 18000]', # NEW: JSON
-    'avg_sales': 16500.00,
-    'trend_pct': 26.67,
-    'sma_metrics': '{"MAE": 1000.0, ...}',
-    # ... other metrics
+  "validation_status": {
+    "input_validation": "passed",
+    "llm_generation": "passed",
+    "output_validation": "failed",  // ← Failure point
+    "execution": "not_started",
+    "insights": "not_started"
+  }
 }
 ```
 
 ---
 
-## 🎓 Learning Path
+## 🚧 Troubleshooting
 
-### Beginner
-1. ✅ Read QUICK_START.md
-2. ✅ Run dashboard
-3. ✅ Upload sample data
-4. ✅ Explore forecasts
+### Common Issues
 
-### Intermediate
-1. ✅ Read USAGE_GUIDE.md
-2. ✅ Try API endpoints
-3. ✅ Configure forecasting parameters
-4. ✅ Understand caching
+**Issue**: "INPUT REJECTED: PII detected"
+- **Cause**: User input contains email, phone, or sensitive data
+- **Fix**: Rephrase query without personal information
 
-### Advanced
-1. ✅ Read IMPLEMENTATION_SUMMARY.md
-2. ✅ Study code implementation
-3. ✅ Run test suite
-4. ✅ Extend with custom methods
+**Issue**: "SQL validation FAILED: Forbidden operation"
+- **Cause**: LLM generated SQL with forbidden keywords (DROP, DELETE, etc.)
+- **Fix**: Rephrase query to be read-only; check prompt templates
 
----
+**Issue**: "LLM generation failed"
+- **Cause**: Groq API error or invalid API key
+- **Fix**: Check `GROQ_API_KEY` environment variable
 
-## 🏆 Key Achievements
-
-✅ **Complete Forecasting System**
-- Multiple methods, dual frequencies, detailed metrics
-
-✅ **Production-Ready Code**
-- Comprehensive testing (6/6 ✅), error handling, caching
-
-✅ **User-Friendly Interface**
-- Interactive Streamlit dashboard, REST API, Python library
-
-✅ **Thorough Documentation**
-- Quick start, usage guide, implementation summary, test report
-
-✅ **Backward Compatible**
-- Extends existing code without breaking changes
-
-✅ **Optimized Performance**
-- Smart caching, fast mode, efficient algorithms
+**Issue**: "Query execution failed"
+- **Cause**: SQL references non-existent tables/columns
+- **Fix**: Check database schema with `/api/sql-chat/schema`
 
 ---
 
-## 📞 Support Resources
+## 🤝 Contributing
 
-- **Streamlit Docs:** https://docs.streamlit.io
-- **FastAPI Docs:** https://fastapi.tiangolo.com
-- **Scikit-learn:** https://scikit-learn.org
-- **Statsmodels:** https://www.statsmodels.org
-- **Prophet:** https://facebook.github.io/prophet
+1. Fork repository
+2. Create feature branch: `git checkout -b feature/new-validation`
+3. Implement changes with tests
+4. Run tests: `pytest`
+5. Submit pull request
 
----
-
-## 🎯 Next Steps
-
-1. **Immediate** (Now)
-   ```bash
-   streamlit run streamlit_app.py
-   # Try the dashboard!
-   ```
-
-2. **Short Term** (Today)
-   - Upload your data
-   - Configure settings
-   - Run initial forecasts
-   - Explore results
-
-3. **Medium Term** (This Week)
-   - Integrate with other systems
-   - Deploy to production
-   - Monitor performance
-   - Fine-tune parameters
-
-4. **Long Term** (Ongoing)
-   - Collect feedback
-   - Improve accuracy
-   - Add custom methods
-   - Scale to more data
+**Important**: All validation logic changes must include tests proving:
+- Unsafe input is rejected
+- Safe input passes through
+- No bypass is possible
 
 ---
 
-## 📝 Version Information
+## 📝 License
 
-- **Current Version:** Production-Ready v1.0
-- **Python:** 3.12+ compatible
-- **Last Updated:** October 17, 2025
-- **Status:** ✅ All tests passing (6/6)
-- **Ready for:** Production deployment
+MIT License - See LICENSE file for details
 
 ---
 
-## 🎉 You're All Set!
+## 📞 Support
 
-Everything is configured, tested, and ready to use. Start with the **QUICK_START.md** and enjoy your sales forecasting system!
+- **Documentation**: See `/docs` endpoint
+- **Validation Info**: GET `/api/sql-chat/validation-info`
+- **Health Check**: GET `/api/sql-chat/health`
 
-```bash
-streamlit run streamlit_app.py
-```
+---
 
-**Happy forecasting! 📈**
+**Built with**: LangChain, Guardrails AI, Groq, FastAPI, SQLite  
+**Version**: 5.0.0 - Strict Validation Pipeline  
+**Last Updated**: October 2025

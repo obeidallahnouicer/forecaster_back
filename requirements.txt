@@ -18,16 +18,22 @@ uvicorn[standard]
 python-multipart
 python-dotenv
 
-# LLM & RAG
+# LangChain - Core framework
 langchain
+langchain-core
+langchain-groq
 langchain-community
-langchain_groq
-openai
-chromadb
-sentence-transformers
+
+# Guardrails AI - SQL safety & PII protection
+guardrails-ai
+sqlparse
+
+# LLM - Groq only
+groq
 
 # Utilities
 tqdm
 
 # Testing
 pytest
+pytest-asyncio

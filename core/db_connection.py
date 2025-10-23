@@ -1,0 +1,112 @@
+"""
+Lightweight DB connection helpers for Text-to-SQL prototype.
+
+Provides an in-memory SQLite database and utilities to load CSV/XLSX
+files found in the repository root into tables so queries can be executed
+without external dependencies.
+"""
+import sqlite3
+from typing import Optional, List, Dict, Any
+from pathlib import Path
+import pandas as pd
+import threading
+import logging
+import re
+
+logger = logging.getLogger("core.db_connection")
+
+# Global connection and lock
+_conn: Optional[sqlite3.Connection] = None
+_lock = threading.RLock()
+
+
+def _sanitize_table_name(name: str) -> str:
+    # Replace any non-alphanumeric character with underscore and prefix with t_
+    import re
+    stem = Path(name).stem
+    safe = re.sub(r'[^0-9a-zA-Z]+', '_', stem)
+    return "t_" + safe.lower()
+
+
+def get_connection(load_files: bool = True) -> sqlite3.Connection:
+    """Get or create a global in-memory sqlite3 connection.
+
+    If load_files is True the function will attempt to load common CSV/XLSX
+    files that exist in the workspace root (e.g. ventes_cleann.csv, BASE.xlsx).
+    """
+    global _conn
+    with _lock:
+        if _conn is None:
+            _conn = sqlite3.connect(":memory:")
+            _conn.row_factory = sqlite3.Row
+            logger.info("Created in-memory SQLite connection for Text-to-SQL prototype")
+
+        if load_files:
+            _load_workbook_files(_conn)
+
+        return _conn
+
+
+def _load_workbook_files(conn: sqlite3.Connection) -> None:
+    """Load CSV/XLSX files into in-memory sqlite tables if not already present."""
+    root = Path(".")
+    candidates = [p for p in root.iterdir() if p.suffix.lower() in {".csv", ".xlsx", ".xls"}]
+
+    for p in candidates:
+        table = _sanitize_table_name(p.name)
+        # If table exists, skip
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        if cur.fetchone():
+            continue
+
+        try:
+            if p.suffix.lower() == ".csv":
+                # Try to auto-detect delimiter for CSVs (comma, semicolon, tab)
+                try:
+                    import csv as _csv
+                    sample = p.open('r', encoding='utf-8', errors='ignore').read(4096)
+                    dialect = _csv.Sniffer().sniff(sample)
+                    sep = dialect.delimiter
+                    df = pd.read_csv(p, sep=sep, engine='python', on_bad_lines='skip')
+                except Exception:
+                    # Fallback to pandas auto-detection
+                    df = pd.read_csv(p, on_bad_lines='skip')
+            else:
+                # read first sheet
+                df = pd.read_excel(p, engine="openpyxl")
+
+            # Normalize column names
+            df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
+            df.to_sql(table, conn, index=False)
+            logger.info(f"Loaded {p.name} into sqlite table {table} ({len(df)} rows)")
+        except Exception as e:
+            logger.exception(f"Failed to load {p}: {e}")
+
+
+def execute_select(sql: str, params: Optional[Dict[str, Any]] = None, max_rows: int = 1000) -> Dict[str, Any]:
+    """Execute SELECT SQL against the in-memory connection and return results.
+
+    Returns a dict with keys: columns, rows (list of dict), rowcount
+    """
+    conn = get_connection(load_files=True)
+    params = params or {}
+    cur = conn.cursor()
+    # Ensure LIMIT protection isn't exceeded by caller; caller validator should add LIMIT
+    try:
+        # Quick sanitization: remove stray leading 't.' before table names (e.g., 't.t_stock')
+        # which some LLM outputs may produce (interpreted incorrectly by SQLite as schema.table)
+        try:
+            sql = re.sub(r"\bt\.(t_[A-Za-z0-9_]+)\.", r"\1.", sql)
+            sql = re.sub(r"\bt\.(t_[A-Za-z0-9_]+)\b", r"\1", sql)
+        except Exception:
+            pass
+
+        cur.execute(sql, params)
+        rows = cur.fetchmany(max_rows)
+        cols = [d[0] for d in cur.description] if cur.description else []
+        results = [dict(zip(cols, r)) for r in rows]
+        # Count remaining rows if needed (cheap approximate)
+        return {"columns": cols, "rows": results, "rowcount": len(results)}
+    except Exception as e:
+        logger.exception(f"SQL execution failed: {e}")
+        raise

@@ -23,6 +23,7 @@ class AgentContext:
     query: str
     session_id: str
     timestamp: datetime
+    query_history: List[str] = field(default_factory=list)
     retrieved_documents: List[Dict[str, Any]] = field(default_factory=list)
     agent_outputs: Dict[str, Any] = field(default_factory=dict)
     reasoning_chain: List[Dict[str, Any]] = field(default_factory=list)
@@ -66,6 +67,12 @@ class AgentContext:
     def get_agent_output(self, agent_name: str) -> Optional[Dict[str, Any]]:
         """Get output from a specific agent."""
         return self.agent_outputs.get(agent_name)
+
+    def add_query(self, query: str) -> None:
+        """Append a new user query to the context's history and update timestamp."""
+        self.query_history.append(query)
+        self.query = query
+        self.timestamp = datetime.now()
     
     def get_reasoning_summary(self) -> str:
         """Get a human-readable summary of the reasoning chain."""
@@ -174,6 +181,35 @@ class ContextManager:
         """
         with self._lock:
             return self._contexts.get(session_id)
+
+    def get_or_create_context(self, session_id: str, query: str = "") -> AgentContext:
+        """
+        Return existing context for session_id or create a new one.
+
+        If a persisted context exists on disk it will be loaded. Otherwise a
+        new AgentContext is created with an empty query (or provided query).
+        """
+        with self._lock:
+            ctx = self._contexts.get(session_id)
+            if ctx:
+                # If a new query is provided, append it to the context history
+                if query:
+                    try:
+                        ctx.add_query(query)
+                    except Exception:
+                        pass
+                return ctx
+
+            # Try to load persisted context from disk
+            loaded = self.load_context(session_id)
+            if loaded:
+                return loaded
+
+            # Create a fresh context
+            new_ctx = AgentContext(query=query, session_id=session_id, timestamp=datetime.now())
+            self._contexts[session_id] = new_ctx
+            self.logger.info(f"Created new context for session {session_id} via get_or_create_context")
+            return new_ctx
     
     def update_context(
         self, 
@@ -334,3 +370,5 @@ def get_context_manager() -> ContextManager:
         _context_manager = ContextManager()
     
     return _context_manager
+
+

@@ -1,9 +1,9 @@
 {
   "session_id": "test_thread_123",
   "query": "What about Product B?",
-  "start_time": "2025-10-18T12:05:26.461904",
-  "end_time": "2025-10-18T12:05:27.676741",
-  "duration_seconds": 1.214837,
+  "start_time": "2025-10-22T10:27:21.971732",
+  "end_time": "2025-10-22T10:27:23.186161",
+  "duration_seconds": 1.214429,
   "success_rate": 0.0,
   "steps": [],
   "metadata": {

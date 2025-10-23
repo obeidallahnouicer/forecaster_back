@@ -1,0 +1,1 @@
+[{"role": "user", "text": "which product should we drop ?"}, {"role": "ai", "text": "Error during multi-agent analysis: Vectorstore initialization failed: Failed to build or load vectorstore after retry\nRun 'python scripts/build_vectorstore.py --recreate' to rebuild the index."}]

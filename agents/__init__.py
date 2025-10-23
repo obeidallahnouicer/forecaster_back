@@ -1,23 +1,21 @@
 """
-Multi-Agent Analytical Reasoning System
+Text-to-SQL Agents Package
 
-This package contains specialized agents for business and financial analysis
-of sales forecast data, providing structured reasoning and actionable insights.
+Simple functional agents for the SQL-based chatbot workflow:
+- QueryAgent: Natural language -> SQL generation
+- SQLValidator: SQL safety validation
+- ExecutorAgent: Safe SQL execution
+- InsightAgent: Data-driven analysis and recommendations
 """
 
-# Export commonly used agents
-from .base_agent import BaseAgent, AgentInput, AgentOutput
-from .user_agent import UserAgent
+from .query_agent import generate_sql
+from .sql_validator import validate_sql
+from .executor_agent import execute_query
+from .insight_agent import summarize_results
 
-# Optional agents - import when available to avoid heavy dependency loading
-def _import_optional_agents():
-	try:
-		from .analysis_agent import AnalysisAgent  # type: ignore
-		from .reasoning_agent import ReasoningAgent  # type: ignore
-		from .advisor_agent import AdvisorAgent  # type: ignore
-		from .validator_agent import ValidatorAgent  # type: ignore
-		return AnalysisAgent, ReasoningAgent, AdvisorAgent, ValidatorAgent
-	except Exception:
-		return None, None, None, None
-
-AnalysisAgent, ReasoningAgent, AdvisorAgent, ValidatorAgent = _import_optional_agents()
+__all__ = [
+    'generate_sql',
+    'validate_sql',
+    'execute_query',
+    'summarize_results'
+]

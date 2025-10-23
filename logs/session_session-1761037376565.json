@@ -1,0 +1,12 @@
+{
+  "session_id": "session-1761037376565",
+  "query": "which product should we drop ?",
+  "start_time": "2025-10-21T10:03:41.706246",
+  "end_time": "2025-10-21T10:03:43.035880",
+  "duration_seconds": 1.329634,
+  "success_rate": 0.0,
+  "steps": [],
+  "metadata": {
+    "source": "chat_api"
+  }
+}
