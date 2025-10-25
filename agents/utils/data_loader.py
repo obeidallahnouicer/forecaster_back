@@ -98,8 +98,18 @@ class DataLoader:
             df.rename(columns=column_mapping, inplace=True)
             
             # Convert data types
+            # Parse dates using day-first (CSV uses dd/mm/YYYY) and try to infer format
             if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+                df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce', infer_datetime_format=True)
+
+            # Ensure key identifiers remain strings and normalize formatting
+            if 'Ref_Article' in df.columns:
+                # Some exports use comma in scientific notation or thousands separators
+                # Keep as string and strip commas/whitespace to avoid float coercion
+                df['Ref_Article'] = df['Ref_Article'].astype(str).str.replace(',', '').str.strip()
+
+            if 'Code_Client' in df.columns:
+                df['Code_Client'] = df['Code_Client'].astype(str).str.strip()
             
             numeric_cols = ['Qte_Vendu', 'CA_HT_BRUT', 'Tx_Remise', 'CA_HT_NET', 'Annee', 'Mois']
             for col in numeric_cols:

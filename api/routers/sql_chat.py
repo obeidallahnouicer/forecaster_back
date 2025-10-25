@@ -143,7 +143,24 @@ async def sql_chat(request: SQLChatRequest):
         # STAGE 4: EXECUTION
         # =====================================================
         executor = ExecutorAgent()
-        exec_result = executor.execute(validated_sql, validation_passed=True)
+        # Pass named parameters produced by the QueryAgent (if any)
+        params = sql_result.get('params') or {}
+        try:
+            exec_result = executor.execute(validated_sql, validation_passed=True, params=params)
+        except Exception as e:
+            # Catch unexpected execution-time exceptions and return a structured
+            # response rather than letting the server return HTTP 500.
+            validation_status["execution"] = "failed"
+            elapsed = (time.time() - start) * 1000
+            logger.exception(f"Unexpected execution exception: {e}")
+            return SQLChatResponse(
+                success=False,
+                question=request.question,
+                error=f"Execution exception: {str(e)}",
+                sql=validated_sql,
+                execution_time_ms=elapsed,
+                validation_status=validation_status
+            )
 
         if not exec_result.get("success"):
             validation_status["execution"] = "failed"

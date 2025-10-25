@@ -44,7 +44,8 @@ class PIIInputValidator:
     # PII detection patterns
     PATTERNS = {
         'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-        'phone': r'\b(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+        # More permissive phone pattern to catch short local formats like 555-1234
+        'phone': r"\b(\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{2,4}[-.\s]?\d{2,4}\b",
         'ssn': r'\b\d{3}-\d{2}-\d{4}\b',
         'credit_card': r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',
         'passport': r'\b[A-Z]{1,2}\d{6,9}\b',

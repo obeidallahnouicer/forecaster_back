@@ -1,10 +1,27 @@
-"""Lightweight in-memory cache for responses and embeddings.
+"""
+DEPRECATED: Legacy in-memory cache for responses and embeddings.
+
+⚠️ WARNING: This module is deprecated and should not be used in new code.
+Use the new production-grade cache system instead:
+  - cache.UploadCacheManager for upload tracking
+  - cache.ForecastCacheManager for forecast caching
+  - cache.CacheManager for general caching
 
 This is intentionally simple; it can be swapped for Redis or disk-backed
 storage in production.
 """
 import time
+import warnings
 from typing import Any, Optional
+
+
+# Issue deprecation warning on import
+warnings.warn(
+    "simple_cache.py is deprecated. Use cache.CacheManager, cache.UploadCacheManager, "
+    "or cache.ForecastCacheManager instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 class SimpleCache:

@@ -123,8 +123,8 @@ def generate_file_schema(root: Optional[str] = None,
     Returns a plain text description intended for insertion into prompts.
     """
     root_path = Path(root) if root else Path.cwd()
-    # Default to only include STOCK and ventes_cleann files unless override provided
-    default_names = ["stock", "ventes_cleann", "ventes_cleann.csv"]
+    # Default to include common data files unless an explicit list is provided
+    default_names = ["stock", "ventes_cleann", "base", "BASE", "STOCK"]
     include_names = [n.lower() for n in only_files] if only_files else default_names
 
     patterns = ["**/*.csv", "**/*.xlsx", "**/*.xls"]
@@ -137,8 +137,13 @@ def generate_file_schema(root: Optional[str] = None,
     for f in files:
         stem = f.stem.lower()
         name = f.name.lower()
-        if any(n in stem or n == name for n in include_names):
-            filtered.append(f)
+        if not only_files:
+            # If no explicit list, include any of the default names or all files
+            if any(n in stem or n == name for n in include_names) or True:
+                filtered.append(f)
+        else:
+            if any(n in stem or n == name for n in include_names):
+                filtered.append(f)
 
     # Deduplicate and limit
     files = sorted(set(filtered), key=lambda p: str(p))[:max_files]
@@ -148,13 +153,13 @@ def generate_file_schema(root: Optional[str] = None,
         # heuristic-based short descriptions
         if any(k in name for k in ("date", "day", "month", "year")):
             return "Date or time indicator"
-        if any(k in name for k in ("id", "ident", "uuid")):
+        if any(k in name for k in ("id", "ident", "uuid", "code")):
             return "Identifier"
-        if any(k in name for k in ("price", "amount", "total", "sales", "revenue", "cost")):
+        if any(k in name for k in ("price", "amount", "total", "sales", "revenue", "cost", "ca")):
             return "Monetary amount / sales value"
         if any(k in name for k in ("qty", "quantity", "units")):
             return "Quantity / units sold"
-        if any(k in name for k in ("product", "sku", "item")):
+        if any(k in name for k in ("product", "sku", "item", "ref", "designation")):
             return "Product identifier or name"
         if any(k in name for k in ("store", "shop", "location", "region")):
             return "Store or location"
@@ -162,11 +167,65 @@ def generate_file_schema(root: Optional[str] = None,
         if sample_vals is not None and len(sample_vals) > 0:
             s = sample_vals[0]
             try:
-                float(s)
+                float(str(s))
                 return "Numeric value"
             except Exception:
                 pass
         return "Free-text / categorical"
+
+    out_lines = []
+    if not files:
+        return "No CSV/XLS/XLSX data files found in workspace."
+
+    for f in files:
+        try:
+            out_lines.append(f"- File: {f.name}")
+            # read header and sample values
+            cols = []
+            samples = {}
+            if pd is not None and f.suffix.lower() in (".csv", ".xlsx", ".xls"):
+                try:
+                    if f.suffix.lower() == ".csv":
+                        df = pd.read_csv(f, nrows=max_preview_rows, on_bad_lines='skip')
+                    else:
+                        df = pd.read_excel(f, nrows=max_preview_rows)
+                    cols = list(df.columns)
+                    for c in cols:
+                        try:
+                            samples[c] = df[c].dropna().astype(str).tolist()[:max_preview_rows]
+                        except Exception:
+                            samples[c] = []
+                except Exception:
+                    cols = []
+            if not cols:
+                # fallback: read header line for CSV
+                if f.suffix.lower() == ".csv":
+                    try:
+                        with f.open("r", encoding="utf-8", errors="ignore") as fh:
+                            reader = csv.reader(fh)
+                            header = next(reader, [])
+                            cols = header
+                    except Exception:
+                        cols = []
+                elif f.suffix.lower() in (".xlsx", ".xls"):
+                    # Without pandas we can't read xlsx reliably
+                    cols = ["(unable to read columns without pandas)"]
+
+            # If pandas returned a single header string containing semicolons, split it
+            if cols and len(cols) == 1 and isinstance(cols[0], str) and ";" in cols[0]:
+                cols = [c.strip() for c in cols[0].split(";") if c.strip()]
+
+            out_lines.append("  - Columns:")
+            for c in cols:
+                sample_vals = samples.get(c, [])
+                desc = infer_desc(c, sample_vals)
+                out_lines.append(f"    - {c} \u2014 {desc}")
+            out_lines.append("")
+        except Exception as exc:
+            out_lines.append(f"- File: {f.name} \u2014 error reading file: {exc}")
+            out_lines.append("")
+
+    return "\n".join(out_lines)
 
 
 # Simple in-memory cache for file_schema with TTL
@@ -187,56 +246,4 @@ def get_cached_file_schema(force_refresh: bool = False, ttl: Optional[int] = Non
         _CACHED_SCHEMA_TS = now
 
     return _CACHED_SCHEMA
-
-    out_lines = []
-    if not files:
-        return "No CSV/XLS/XLSX data files found in workspace."
-
-    for f in files:
-        try:
-            out_lines.append(f"- File: {f.name}")
-            # read header and sample values
-            cols = []
-            samples = {}
-            if pd is not None and f.suffix.lower() in (".csv", ".xlsx", ".xls"):
-                try:
-                    if f.suffix.lower() == ".csv":
-                        df = pd.read_csv(f, nrows=max_preview_rows)
-                    else:
-                        df = pd.read_excel(f, nrows=max_preview_rows)
-                    cols = list(df.columns)
-                    for c in cols:
-                        samples[c] = df[c].dropna().astype(str).tolist()[:max_preview_rows]
-                except Exception:
-                    cols = []
-            if not cols:
-                # fallback: read header line for CSV or use openpyxl if available for xlsx
-                if f.suffix.lower() == ".csv":
-                    try:
-                        with f.open("r", encoding="utf-8", errors="ignore") as fh:
-                            reader = csv.reader(fh)
-                            header = next(reader, [])
-                            cols = header
-                    except Exception:
-                        cols = []
-                elif f.suffix.lower() in (".xlsx", ".xls"):
-                    # try openpyxl via pandas if pandas was not available; else just state sheet unknown
-                    cols = ["(unable to read columns without pandas)"]
-
-            # If pandas returned a single header string containing semicolons, split it
-            if cols and len(cols) == 1 and isinstance(cols[0], str) and ";" in cols[0]:
-                # split on semicolon and strip whitespace
-                cols = [c.strip() for c in cols[0].split(";") if c.strip()]
-
-            out_lines.append("  - Columns:")
-            for c in cols:
-                sample_vals = samples.get(c, [])
-                desc = infer_desc(c, sample_vals)
-                out_lines.append(f"    - {c} — {desc}")
-            out_lines.append("")
-        except Exception as exc:
-            out_lines.append(f"- File: {f.name} — error reading file: {exc}")
-            out_lines.append("")
-
-    return "\n".join(out_lines)
 

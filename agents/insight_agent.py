@@ -1,8 +1,8 @@
 """
-InsightAgent: data-driven analysis using LangChain chains.
+InsightAgent: data-driven analysis using Business Rules Engine.
 
 Computes business KPIs, detects patterns/trends, and generates actionable
-recommendations using deterministic rules + LangChain LLM analysis.
+recommendations using the centralized Business Rules Engine + LangChain LLM analysis.
 """
 import logging
 import statistics
@@ -13,6 +13,8 @@ from langchain_groq import ChatGroq
 from langchain_core.output_parsers import StrOutputParser
 
 from core.config import GROQ_API_KEY, GROQ_MODEL
+from core.business_rules import get_business_rules_engine, EntityType
+from core.table_schemas import infer_entity_type
 from prompts.insight_generation import INSIGHT_GENERATION_CHAT_PROMPT, generate_file_schema
 
 logger = logging.getLogger("agents.insight_agent")
@@ -132,7 +134,7 @@ def summarize_results(
     sql: str = ""
 ) -> Dict[str, Any]:
     """
-    Analyze SQL query results using LangChain and generate business insights.
+    Analyze SQL query results using Business Rules Engine and LangChain.
     
     Args:
         rows: Query result rows
@@ -162,30 +164,70 @@ def summarize_results(
     }
     
     if not rows:
-        result['summary'] = "No data found for your query."
-        result['recommendations'].append("Try adjusting filters or date ranges.")
+        result['summary'] = "Aucune donnée trouvée pour cette requête."
+        result['recommendations'].append({
+            "rule_name": "no_data",
+            "recommendation": "Essayez d'ajuster les filtres ou la période de temps.",
+            "alert_level": "info"
+        })
         return result
     
-    # Compute statistics
+    # Infer entity type from question
+    entity_type_str = infer_entity_type(question)
+    
+    # Map string to EntityType enum
+    entity_type_map = {
+        "clients": EntityType.CLIENT,
+        "produits": EntityType.PRODUCT,
+        "stock": EntityType.STOCK,
+        "ventes_mensuelles": EntityType.SALES,
+        "general": EntityType.SALES
+    }
+    entity_type = entity_type_map.get(entity_type_str, EntityType.SALES)
+    
+    logger.info(f"Inferred entity type: {entity_type.value} for question: {question[:50]}")
+    
+    # Use Business Rules Engine for KPI calculation and recommendations
+    business_engine = get_business_rules_engine()
+    business_insights = business_engine.generate_insights(
+        entity_type=entity_type,
+        rows=rows,
+        question=question
+    )
+    
+    # Extract KPIs and format for response
+    result['kpis'] = {
+        k: v.get('value') for k, v in business_insights.get('kpis', {}).items()
+    }
+    
+    # Extract recommendations
+    recommendations = business_insights.get('recommendations', [])
+    result['recommendations'] = [
+        f"{r['alert_level'].upper()}: {r['recommendation']}"
+        for r in recommendations
+    ]
+    
+    # Generate insights from KPIs
+    insights = []
+    insights.append(f"Analyse de {len(rows)} enregistrements.")
+    
+    # Add formatted KPI insights
+    for kpi_name, kpi_data in business_insights.get('kpis', {}).items():
+        if kpi_data.get('formatted') and kpi_data.get('formatted') != 'N/A':
+            insights.append(
+                f"{kpi_data.get('description', kpi_name)}: "
+                f"{kpi_data['formatted']} {kpi_data.get('unit', '')}"
+            )
+    
+    result['insights'] = insights[:5]  # Top 5 insights
+    
+    # Use Business Engine summary
+    result['summary'] = business_insights.get('summary', '')
+    
+    # Compute statistics for LLM context
     numeric_cols = _detect_numeric_columns(rows)
     stats = _compute_stats(rows, numeric_cols)
     result['stats'] = stats
-    
-    # KPIs
-    result['kpis']['total_rows'] = len(rows)
-    result['kpis']['total_columns'] = len(columns)
-    
-    for col, col_stats in stats.items():
-        result['kpis'][f'{col}_total'] = col_stats.get('total', 0)
-        result['kpis'][f'{col}_avg'] = col_stats.get('mean', 0)
-    
-    # Generate deterministic insights
-    insights = _generate_insights(rows, stats, question)
-    result['insights'] = insights
-    
-    # Generate recommendations
-    recommendations = _generate_recommendations(rows, stats, question)
-    result['recommendations'] = recommendations
     
     # Build context for LLM summary using LangChain
     sample_rows_str = json.dumps(rows[:3], default=str, indent=2) if rows else "No rows"

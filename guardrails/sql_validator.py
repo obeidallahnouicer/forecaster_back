@@ -119,7 +119,20 @@ class SQLOutputValidator:
                 errors=["Query is empty or whitespace only"]
             )
         
-        # Normalize SQL
+        # Quick check: detect comment-based injection patterns before normalization
+        if re.search(r"--|/\*|\*/", sql_query):
+            errors.append("Comment markers detected in SQL")
+            logger.error("Comment-based injection detected in SQL")
+            return SQLValidationResult(
+                is_valid=False,
+                sql_query=sql_query,
+                normalized_sql=None,
+                failure_reason=ValidationFailureReason.SQL_INJECTION,
+                message="SQL validation FAILED: Comment-based injection detected",
+                errors=errors,
+            )
+
+        # Normalize SQL (strip comments after we've already checked for them)
         try:
             normalized = sqlparse.format(
                 sql_query,
@@ -137,24 +150,23 @@ class SQLOutputValidator:
                 message=f"SQL validation FAILED: Parse error - {str(e)}",
                 errors=[f"Parse error: {str(e)}"]
             )
-        
-        # 1. Check for SQL injection patterns
+
+        # 1. Check for SQL injection patterns (semicolons, suspicious functions)
         injection_detected = self._check_injection(normalized)
         if injection_detected:
             errors.append(f"SQL injection pattern detected: {injection_detected}")
             logger.error(f"SQL INJECTION DETECTED: {injection_detected}")
-            # Check if semicolon is part of the pattern
             error_detail = "semicolon and multiple statements" if ";" in sql_query else "SQL injection"
             return SQLValidationResult(
                 is_valid=False,
                 sql_query=sql_query,
-                normalized_sql=normalized,
+                normalized_sql=None,
                 failure_reason=ValidationFailureReason.SQL_INJECTION,
                 message=f"SQL validation FAILED: Potential SQL injection detected ({error_detail})",
-                errors=errors
+                errors=errors,
             )
-        
-        # 2. Check for forbidden operations
+
+        # 2. Check for forbidden operations (INSERT/UPDATE/DELETE/DROP/ALTER etc.)
         forbidden = self._check_forbidden_operations(normalized)
         if forbidden:
             errors.append(f"Forbidden operation detected: {forbidden}")
@@ -162,10 +174,10 @@ class SQLOutputValidator:
             return SQLValidationResult(
                 is_valid=False,
                 sql_query=sql_query,
-                normalized_sql=normalized,
+                normalized_sql=None,
                 failure_reason=ValidationFailureReason.FORBIDDEN_OPERATION,
                 message=f"SQL validation FAILED: Forbidden operation '{forbidden}' - only SELECT queries allowed",
-                errors=errors
+                errors=errors,
             )
         
         # 3. Validate SQL structure
@@ -181,8 +193,26 @@ class SQLOutputValidator:
                 message=f"SQL validation FAILED: Invalid structure",
                 errors=errors
             )
-        
-        # 4. Validate syntax using sqlparse
+        # 4. Detect inline string literals (unparameterized values) - discourage PII exposure
+        #    Require models to use named parameters like :param_name for user-provided values
+        inline_literals = re.findall(r"'([^']*)'", normalized)
+        if inline_literals:
+            # Allow format strings (strftime patterns) and empty strings; flag likely user-provided values
+            non_empty = [lit for lit in inline_literals if lit.strip() and '%' not in lit]
+            if non_empty:
+                errors.append(f"Inline string literal(s) detected: {non_empty[:5]}")
+                logger.error(f"INLINE LITERAL(S) DETECTED: {non_empty[:5]}")
+                return SQLValidationResult(
+                    is_valid=False,
+                    sql_query=sql_query,
+                    normalized_sql=normalized,
+                    failure_reason=ValidationFailureReason.INVALID_STRUCTURE,
+                    message=("SQL validation FAILED: Inline string literal(s) found. "
+                             "All user-provided values must be parameterized using named parameters like :param_name."),
+                    errors=errors,
+                )
+
+        # 5. Validate syntax using sqlparse
         syntax_errors = self._validate_syntax(normalized)
         if syntax_errors:
             errors.extend(syntax_errors)
@@ -193,9 +223,9 @@ class SQLOutputValidator:
                 normalized_sql=normalized,
                 failure_reason=ValidationFailureReason.SYNTAX_ERROR,
                 message=f"SQL validation FAILED: Syntax errors detected",
-                errors=errors
+                errors=errors,
             )
-        
+
         # All checks passed - VALID SQL
         logger.info("SQL validation PASSED: Query is valid and safe")
         return SQLValidationResult(
@@ -204,7 +234,7 @@ class SQLOutputValidator:
             normalized_sql=normalized,
             failure_reason=None,
             message="SQL is valid and safe",
-            errors=[]
+            errors=[],
         )
     
     def _check_injection(self, sql: str) -> Optional[str]:

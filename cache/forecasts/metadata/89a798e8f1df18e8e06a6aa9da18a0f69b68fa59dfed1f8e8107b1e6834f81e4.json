@@ -1,0 +1,18 @@
+{
+  "key": "forecast:summary:62832e26",
+  "created_at": 1761240989.0663617,
+  "updated_at": 1761240989.0663617,
+  "expires_at": 1761327389.0663617,
+  "version": "v1",
+  "status": "completed",
+  "size_bytes": 275525,
+  "hit_count": 0,
+  "last_accessed": null,
+  "tags": {
+    "frequency": "yearly",
+    "type": "summary",
+    "count": 632,
+    "fingerprint": "8b4254c33f1351bf"
+  },
+  "checksum": "af38741adf63f26d2e2da69b2d842d0f"
+}

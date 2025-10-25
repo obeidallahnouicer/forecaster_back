@@ -9,7 +9,12 @@ import logging
 import math
 import numpy as np
 import datetime
+import time
+import hashlib
 from pydantic import BaseModel
+
+# Import new cache managers
+from cache import UploadCacheManager, ForecastCacheManager
 
 # Global cache directory (project-root / "cache")
 # file is at api/routers/forecasts.py -> parents[2] == project root
@@ -19,6 +24,117 @@ GLOBAL_SUMMARY = GLOBAL_CACHE / "summary" / "summary.parquet"
 
 router = APIRouter()
 logger = logging.getLogger("app.forecasts")
+
+# Initialize cache managers
+upload_cache = UploadCacheManager(
+    cache_dir=GLOBAL_CACHE,
+    max_retries=3,
+    retry_delay=60,
+    stale_threshold=3600,  # 1 hour
+    ttl=604800  # 7 days
+)
+
+forecast_cache = ForecastCacheManager(
+    cache_dir=GLOBAL_CACHE,
+    default_ttl=86400,  # 24 hours
+    model_version="v1"
+)
+
+
+def _parse_metrics_field(val):
+    """Parse a metrics field which may be None, a JSON string, or a dict.
+
+    Returns a dict or None.
+    """
+    if val is None:
+        return None
+    try:
+        # If it's already a dict-like, return as-is
+        if isinstance(val, dict):
+            return val
+        # If it's a string, try to parse as JSON-like
+        if isinstance(val, str):
+            s = val.strip()
+            if s == "":
+                return None
+            # Some stored metric strings use single quotes; normalize
+            try:
+                import json
+                return json.loads(s)
+            except Exception:
+                # Fallback: attempt to eval safely for simple dicts
+                try:
+                    return eval(s, {"__builtins__": None}, {})
+                except Exception:
+                    return None
+    except Exception:
+        return None
+
+
+def _ensure_metric_keys(d):
+    """Ensure the metric dict contains MAE, MSE, RMSE, MAPE, R2 keys.
+
+    Convert numeric-like values to float where possible; missing keys set to None.
+    """
+    if d is None:
+        return {"MAE": None, "MSE": None, "RMSE": None, "MAPE": None, "R2": None}
+    out = {}
+    for k in ("MAE", "MSE", "RMSE", "MAPE", "R2"):
+        v = None
+        # try case-insensitive matches and common lowercase keys
+        for key_variant in (k, k.lower(), k.upper()):
+            if key_variant in d:
+                v = d.get(key_variant)
+                break
+        # try some common alternative names
+        if v is None:
+            for alt in ("mae", "mse", "rmse", "mape", "r2"):
+                if alt in d:
+                    v = d.get(alt)
+                    break
+        # coerce numeric-like values
+        try:
+            if v is not None:
+                if isinstance(v, (int, float, np.floating, np.integer)):
+                    out[k] = float(v)
+                else:
+                    out[k] = float(str(v))
+            else:
+                out[k] = None
+        except Exception:
+            out[k] = None
+    return out
+
+
+def normalize_metrics_in_df(df):
+    """Normalize metrics columns in the summary dataframe in-place.
+
+    For each metrics column (sma_metrics, es_metrics, lr_metrics, arima_metrics,
+    prophet_metrics, xgb_metrics), parse strings/dicts and expand to JSON/dict
+    with guaranteed keys: MAE,MSE,RMSE,MAPE,R2.
+    """
+    if df is None or df.empty:
+        return df
+
+    metrics_cols = [
+        'sma_metrics', 'es_metrics', 'lr_metrics', 'arima_metrics', 'prophet_metrics', 'xgb_metrics'
+    ]
+
+    for col in metrics_cols:
+        if col not in df.columns:
+            continue
+
+        def _norm_cell(v):
+            parsed = _parse_metrics_field(v)
+            return _ensure_metric_keys(parsed)
+
+        try:
+            df[col] = df[col].apply(_norm_cell)
+        except Exception:
+            # As a last resort, set all rows to None-keys dict
+            df[col] = [{"MAE": None, "MSE": None, "RMSE": None, "MAPE": None, "R2": None} for _ in range(len(df))]
+
+    return df
 
 
 def _sanitize_value(v):
@@ -83,6 +199,26 @@ def _sanitize_value(v):
     return v
 
 
+def normalize_metrics_in_result(res):
+    """Normalize per-article forecast result dict in-place.
+
+    Ensures each method metrics field is a dict with keys MAE,MSE,RMSE,MAPE,R2.
+    """
+    if not isinstance(res, dict):
+        return res
+    metrics_cols = [
+        'sma_metrics', 'es_metrics', 'lr_metrics', 'arima_metrics', 'prophet_metrics', 'xgb_metrics'
+    ]
+    for col in metrics_cols:
+        if col in res:
+            try:
+                parsed = _parse_metrics_field(res.get(col))
+                res[col] = _ensure_metric_keys(parsed)
+            except Exception:
+                res[col] = {"MAE": None, "MSE": None, "RMSE": None, "MAPE": None, "R2": None}
+    return res
+
+
 def sanitize(obj):
     if isinstance(obj, dict):
         return {k: sanitize(v) for k, v in obj.items()}
@@ -93,6 +229,14 @@ def sanitize(obj):
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_dataset(file: UploadFile = File(...), frequency: str = Form("yearly")):
+    """
+    Upload dataset with robust cache tracking.
+    
+    Features:
+    - Upload state tracking (pending -> processing -> completed/failed)
+    - Automatic retry for failed uploads
+    - Persistent upload history
+    """
     if not file.filename.lower().endswith((".csv", ".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="File must be CSV or Excel")
 
@@ -100,24 +244,56 @@ async def upload_dataset(file: UploadFile = File(...), frequency: str = Form("ye
     if frequency.lower() not in ["yearly", "monthly"]:
         raise HTTPException(status_code=400, detail="Frequency must be 'yearly' or 'monthly'")
 
-    # save temp
+    # Generate upload ID
+    upload_id = f"upload_{int(time.time())}_{hashlib.md5(file.filename.encode()).hexdigest()[:8]}"
+    
+    # Save file
     tmp = Path("./tmp_uploads")
     tmp.mkdir(parents=True, exist_ok=True)
     out = tmp / file.filename
+    
+    file_content = await file.read()
+    file_size = len(file_content)
+    
     with out.open("wb") as f:
-        f.write(await file.read())
-
+        f.write(file_content)
+    
+    # Create upload cache entry (PENDING state)
+    upload_cache.create_upload(
+        upload_id=upload_id,
+        file_path=str(out),
+        file_name=file.filename,
+        file_size=file_size,
+        frequency=frequency.lower(),
+        metadata={"original_filename": file.filename}
+    )
+    logger.info(f"Upload cached: {upload_id} ({file.filename}, {file_size} bytes)")
+    
+    # Mark as processing
+    upload_cache.mark_processing(upload_id)
+    
     try:
+        # Create session
         info = REGISTRY.create_session_from_file(str(out), frequency=frequency.lower())
-        logger.info(f"Created session {info.session_id} from upload {file.filename} (frequency={frequency})")
-        # use the loaded dataframe to report rows to avoid re-reading with wrong encoding
         rows = getattr(info.forecaster, "df_raw", None).shape[0] if getattr(info.forecaster, "df_raw", None) is not None else 0
+        
+        # Mark upload as completed
+        upload_cache.mark_completed(upload_id, info.session_id)
+        
+        logger.info(f"Upload completed: {upload_id} -> session {info.session_id} ({rows} rows)")
+        
         return {"session_id": info.session_id, "rows": int(rows)}
+        
     except RuntimeError as e:
-        # expected when reading file fails due to encoding/parsing
+        # Expected when reading file fails due to encoding/parsing
+        error_msg = f"Data read error: {str(e)}"
+        upload_cache.mark_failed(upload_id, error_msg)
         logger.exception(f"Failed to create session from upload (read error): {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # Unexpected error - mark for retry
+        error_msg = f"Processing error: {str(e)}"
+        upload_cache.mark_failed(upload_id, error_msg)
         logger.exception(f"Failed to create session from upload: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -206,7 +382,7 @@ async def forecast_article(session_id: str, ref: str, period: int = 3, alpha: fl
                            force_recompute: Optional[bool] = False, fast_mode: Optional[bool] = True,
                            include_methods: Optional[str] = None):
     """
-    Forecast a single article with full parameter control.
+    Forecast a single article with production-grade caching.
     
     Query Parameters:
       - ref: Article reference (required)
@@ -218,29 +394,80 @@ async def forecast_article(session_id: str, ref: str, period: int = 3, alpha: fl
     
     Returns:
         Full forecast result with all methods, metrics, and historical data
+        
+    Cache behavior:
+      - Cache key includes: ref_article, data_fingerprint, model_version, parameters
+      - Automatic invalidation on data/model/parameter changes
+      - 24-hour TTL by default
     """
     info = REGISTRY.get(session_id)
     if not info:
         raise HTTPException(status_code=404, detail="Session not found")
     f = info.forecaster
     
-    # Parse include_methods (comma-separated) into list expected by SalesForecaster
+    # Parse include_methods
     methods_list = None
     if include_methods:
         methods_list = [m.strip() for m in include_methods.split(",") if m.strip()]
-        # Validate method names
         valid_methods = {'SMA', 'ExpSmoothing', 'LinearReg', 'ARIMA', 'PROPHET', 'XGBOOST'}
         methods_list = [m for m in methods_list if m in valid_methods]
         if not methods_list:
             raise HTTPException(status_code=400, detail=f"No valid methods specified. Valid: {','.join(valid_methods)}")
-
-    # ✅ FIX: Respect force_recompute parameter (was hardcoded to True)
-    res = f.forecast_article(ref, period=period, alpha=alpha, force_recompute=force_recompute, 
+    
+    # Build cache parameters (single-user optimized - no session dependency)
+    params = {
+        "period": period,
+        "alpha": alpha,
+        "fast_mode": fast_mode,
+        "methods": methods_list or "all",
+        "frequency": f.frequency
+    }
+    
+    # Compute data fingerprint for cache validation
+    data_fingerprint = forecast_cache._compute_fingerprint(f.df_raw)
+    
+    # Try cache first (unless force_recompute)
+    if not force_recompute:
+        cached_result = forecast_cache.get_article_forecast(
+            ref_article=ref,
+            params=params,
+            data_fingerprint=data_fingerprint
+        )
+        if cached_result:
+            logger.info(f"[CACHE HIT] Article {ref} forecast")
+            try:
+                cached_result = normalize_metrics_in_result(cached_result)
+            except Exception:
+                logger.exception("Failed to normalize metrics for cached article result")
+            return JSONResponse(content=sanitize(cached_result))
+    
+    # Cache miss or force recompute - compute forecast
+    start_time = time.time()
+    res = f.forecast_article(ref, period=period, alpha=alpha, force_recompute=True,  # Always force in SalesForecaster to bypass its internal cache
                              fast_mode=fast_mode, include_methods=methods_list, return_metrics=True)
+    computation_time_ms = (time.time() - start_time) * 1000
+    
     if res is None:
         raise HTTPException(status_code=404, detail="Article not found or no historical data")
-    logger.info(f"Forecast article {ref} in session {session_id}: avg={res.get('avg_forecast')}, trend={res.get('trend_label')}, "
-               f"force_recompute={force_recompute}, methods={methods_list}")
+    
+    # Cache the result (single-user: fingerprint stored in metadata, not in key)
+    try:
+        res = normalize_metrics_in_result(res)
+    except Exception:
+        logger.exception("Failed to normalize metrics for computed article result")
+
+    forecast_cache.set_article_forecast(
+        ref_article=ref,
+        forecast_data=res,
+        data_fingerprint=data_fingerprint,
+        frequency=f.frequency,
+        params=params,
+        computation_time_ms=computation_time_ms
+    )
+    
+    logger.info(f"[CACHE MISS] Forecast article {ref}: avg={res.get('avg_forecast')}, "
+               f"trend={res.get('trend_label')}, computed in {computation_time_ms:.0f}ms")
+    
     return JSONResponse(content=sanitize(res))
 
 
@@ -265,7 +492,7 @@ async def forecast_all(session_id: str, period: int = Form(3), alpha: float = Fo
                        force_recompute: Optional[bool] = Form(False), fast_mode: Optional[bool] = Form(True),
                        include_methods: Optional[str] = Form(None)):
     """
-    Forecast all articles with full parameter control.
+    Forecast all articles with production-grade caching.
     
     Form Parameters:
       - period: SMA period (default 3)
@@ -276,31 +503,100 @@ async def forecast_all(session_id: str, period: int = Form(3), alpha: float = Fo
     
     Returns:
         Summary with count, preview (first 10), and top products by forecast
+        
+    Cache behavior:
+      - Summary cache key includes: data_fingerprint, model_version, parameters
+      - Automatic invalidation on data/model/parameter changes
+      - 24-hour TTL by default
     """
     info = REGISTRY.get(session_id)
     if not info:
         raise HTTPException(status_code=404, detail="Session not found")
     f = info.forecaster
 
-    def progress(i, tot):
-        pass
-
     methods_list = None
     if include_methods:
         methods_list = [m.strip() for m in include_methods.split(",") if m.strip()]
-        # Validate method names
         valid_methods = {'SMA', 'ExpSmoothing', 'LinearReg', 'ARIMA', 'PROPHET', 'XGBOOST'}
         methods_list = [m for m in methods_list if m in valid_methods]
         if not methods_list:
             raise HTTPException(status_code=400, detail=f"No valid methods specified. Valid: {','.join(valid_methods)}")
+    
+    # Build cache parameters (single-user optimized)
+    params = {
+        "period": period,
+        "alpha": alpha,
+        "fast_mode": fast_mode,
+        "methods": methods_list or "all",
+        "frequency": f.frequency
+    }
+    
+    # Compute data fingerprint for validation
+    data_fingerprint = forecast_cache._compute_fingerprint(f.df_raw)
+    
+    # Try cache first (unless force_recompute)
+    if not force_recompute:
+        cached_summary = forecast_cache.get_summary_forecast(
+            params=params,
+            data_fingerprint=data_fingerprint
+        )
+        if cached_summary is not None:
+            df = cached_summary
+            logger.info(f"[CACHE HIT] Summary forecast ({len(df)} articles)")
+            # Normalize metrics in cached dataframe to ensure fields exist
+            try:
+                df = normalize_metrics_in_df(df)
+            except Exception:
+                logger.exception("Failed to normalize metrics for cached summary")
 
-    # ✅ FIX: Respect force_recompute parameter (was hardcoded to True)
+            # Build response from cached data
+            preview = df.head(10).to_dict(orient='records') if not df.empty else []
+            preview = sanitize(preview)
+            
+            top_products = []
+            try:
+                if not df.empty and 'avg_forecast' in df.columns:
+                    top_df = df.sort_values('avg_forecast', ascending=False).head(5)
+                    top_products = top_df[['ref_article', 'designation', 'avg_forecast']].to_dict(orient='records')
+                    top_products = sanitize(top_products)
+            except Exception:
+                logger.exception("Failed to compute top_products from cached summary")
+            
+            return JSONResponse(content={
+                "count": int(len(df)),
+                "preview": preview,
+                "top_products": top_products,
+                "cached": True
+            })
+    
+    # Cache miss or force recompute - compute forecasts
+    def progress(i, tot):
+        pass
+
     try:
-        df = f.forecast_all_articles(period=period, alpha=alpha, force_recompute=force_recompute,
+        start_time = time.time()
+        df = f.forecast_all_articles(period=period, alpha=alpha, force_recompute=True,  # Always force in SalesForecaster
                                      fast_mode=fast_mode, include_methods=methods_list, progress_callback=progress)
-        cache_mode = "bypassed" if force_recompute else "used"
-        logger.info(f"Forecasted all articles for session {session_id}: {len(df)} results (cache {cache_mode}, "
-                   f"period={period}, alpha={alpha}, fast_mode={fast_mode}, methods={methods_list})")
+        computation_time_ms = (time.time() - start_time) * 1000
+
+        # Normalize metrics in the computed dataframe before caching/saving
+        try:
+            df = normalize_metrics_in_df(df)
+        except Exception:
+            logger.exception("Failed to normalize metrics for computed summary")
+
+        logger.info(f"[CACHE MISS] Forecasted all articles: {len(df)} results, "
+                   f"computed in {computation_time_ms:.0f}ms (period={period}, alpha={alpha}, fast_mode={fast_mode}, methods={methods_list})")
+
+        # Cache the summary (single-user: fingerprint in metadata, not key)
+        forecast_cache.set_summary_forecast(
+            summary_df=df,
+            data_fingerprint=data_fingerprint,
+            frequency=f.frequency,
+            params=params,
+            computation_time_ms=computation_time_ms
+        )
+
     except Exception as e:
         logger.exception(f"Failed to compute forecasts for session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -416,6 +712,189 @@ async def download_summary(session_id: str):
 @router.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ==================== CACHE MANAGEMENT ENDPOINTS ====================
+
+@router.get("/cache/stats")
+async def get_cache_stats():
+    """Get cache statistics for uploads and forecasts"""
+    try:
+        upload_stats = upload_cache.get_stats()
+        forecast_stats = forecast_cache.get_stats()
+        
+        return {
+            "uploads": upload_stats,
+            "forecasts": forecast_stats
+        }
+    except Exception as e:
+        logger.exception(f"Failed to get cache stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cache/uploads")
+async def list_cached_uploads(status: Optional[str] = None, frequency: Optional[str] = None):
+    """
+    List cached uploads with optional filters.
+    
+    Query params:
+    - status: Filter by status (pending, processing, completed, failed)
+    - frequency: Filter by frequency (yearly, monthly)
+    """
+    try:
+        uploads = upload_cache.list_uploads(status=status, frequency=frequency)
+        
+        return {
+            "count": len(uploads),
+            "uploads": [u.to_dict() for u in uploads]
+        }
+    except Exception as e:
+        logger.exception(f"Failed to list uploads: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cache/uploads/{upload_id}")
+async def get_upload_status(upload_id: str):
+    """Get status of specific upload"""
+    try:
+        entry = upload_cache.get_upload(upload_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        
+        return entry.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to get upload: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cache/uploads/{upload_id}/retry")
+async def retry_failed_upload(upload_id: str):
+    """Retry a failed upload"""
+    try:
+        entry = upload_cache.get_upload(upload_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        
+        if not upload_cache.can_retry(upload_id):
+            return {
+                "success": False,
+                "message": f"Upload cannot be retried (status={entry.status}, retries={entry.retry_count})"
+            }
+        
+        # Attempt to reprocess
+        upload_cache.mark_processing(upload_id)
+        
+        try:
+            info = REGISTRY.create_session_from_file(entry.file_path, frequency=entry.frequency)
+            rows = getattr(info.forecaster, "df_raw", None).shape[0] if getattr(info.forecaster, "df_raw", None) is not None else 0
+            
+            upload_cache.mark_completed(upload_id, info.session_id)
+            
+            logger.info(f"Upload retry successful: {upload_id} -> session {info.session_id}")
+            
+            return {
+                "success": True,
+                "session_id": info.session_id,
+                "rows": int(rows)
+            }
+        except Exception as e:
+            error_msg = f"Retry failed: {str(e)}"
+            upload_cache.mark_failed(upload_id, error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to retry upload: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/cache/uploads/{upload_id}")
+async def delete_cached_upload(upload_id: str):
+    """Delete cached upload entry"""
+    try:
+        deleted = upload_cache.delete_upload(upload_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        
+        return {"deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to delete upload: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cache/uploads/cleanup")
+async def cleanup_stale_uploads():
+    """Cleanup stale uploads that are stuck in processing"""
+    try:
+        count = upload_cache.cleanup_stale()
+        return {
+            "cleaned_up": count,
+            "message": f"Cleaned up {count} stale uploads"
+        }
+    except Exception as e:
+        logger.exception(f"Failed to cleanup uploads: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cache/forecasts/invalidate")
+async def invalidate_forecast_cache(
+    ref_article: Optional[str] = None,
+    frequency: Optional[str] = None
+):
+    """
+    Invalidate forecast cache (single-user optimized).
+    
+    Query params:
+    - ref_article: Invalidate for specific article
+    - frequency: Invalidate for specific frequency (yearly/monthly)
+    - If none specified, invalidates all
+    
+    Note: Since this is a single-user system, cache keys are not session-based.
+    """
+    try:
+        count = 0
+        
+        if ref_article:
+            # Invalidate specific article (all parameter combinations)
+            count = forecast_cache.invalidate_article(ref_article)
+        elif frequency:
+            # Invalidate by frequency
+            count = forecast_cache.invalidate_all(frequency=frequency)
+        else:
+            # Invalidate all forecasts
+            count = forecast_cache.invalidate_all()
+        
+        return {
+            "invalidated": count,
+            "message": f"Invalidated {count} forecast cache entries"
+        }
+    except Exception as e:
+        logger.exception(f"Failed to invalidate cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cache/clear")
+async def clear_all_cache():
+    """Clear all cache (uploads and forecasts) - use with caution!"""
+    try:
+        upload_count = upload_cache.cache.clear()
+        forecast_count = forecast_cache.cache.clear()
+        
+        return {
+            "cleared": {
+                "uploads": upload_count,
+                "forecasts": forecast_count
+            },
+            "message": f"Cleared {upload_count} uploads and {forecast_count} forecasts"
+        }
+    except Exception as e:
+        logger.exception(f"Failed to clear cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/chatbotdf")
@@ -863,7 +1342,12 @@ async def forecast_all_monthly(
         )
         
         logger.info(f"Forecasted all articles (monthly) for session {session_id}: {len(df)} results")
-        
+        # Normalize metrics to ensure consumers always receive standard metric keys
+        try:
+            df = normalize_metrics_in_df(df)
+        except Exception:
+            logger.exception("Failed to normalize metrics for monthly computed summary")
+
         # Prepare response
         preview = df.head(10).to_dict(orient='records') if not df.empty else []
         preview = sanitize(preview)

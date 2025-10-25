@@ -32,7 +32,7 @@ def get_connection(load_files: bool = True) -> sqlite3.Connection:
     """Get or create a global in-memory sqlite3 connection.
 
     If load_files is True the function will attempt to load common CSV/XLSX
-    files that exist in the workspace root (e.g. ventes_cleann.csv, BASE.xlsx).
+    files that exist in the workspace root (e.g. ventes_cleann.csv, STOCK.xlsx).
     """
     global _conn
     with _lock:
@@ -50,7 +50,10 @@ def get_connection(load_files: bool = True) -> sqlite3.Connection:
 def _load_workbook_files(conn: sqlite3.Connection) -> None:
     """Load CSV/XLSX files into in-memory sqlite tables if not already present."""
     root = Path(".")
+    # Only load files that are relevant to the application: STOCK and ventes_cleann
     candidates = [p for p in root.iterdir() if p.suffix.lower() in {".csv", ".xlsx", ".xls"}]
+    # Filter to include files that are relevant to the application (stock, ventes_cleann, base)
+    candidates = [p for p in candidates if any(k in p.stem.lower() for k in ("stock", "ventes_cleann", "base"))]
 
     for p in candidates:
         table = _sanitize_table_name(p.name)
@@ -77,6 +80,20 @@ def _load_workbook_files(conn: sqlite3.Connection) -> None:
 
             # Normalize column names
             df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
+            # Normalize date-like columns to ISO format (YYYY-MM-DD) so SQL ORDER BY works correctly
+            # Detect common date column names (e.g., Date, date, Date_Vente) case-insensitive
+            for col in list(df.columns):
+                try:
+                    if 'date' in col.lower():
+                        # Parse many common date formats, prefer day-first (dd/mm/YYYY)
+                        parsed = pd.to_datetime(df[col].astype(str), dayfirst=True, errors='coerce')
+                        # If parsing succeeded for at least some rows, overwrite with ISO strings
+                        if parsed.notna().sum() > 0:
+                            df[col] = parsed.dt.strftime('%Y-%m-%d')
+                            logger.info(f"Normalized date column '{col}' to ISO format")
+                except Exception:
+                    # Don't fail the whole load if date normalization fails
+                    logger.debug(f"Date normalization failed for column {col}", exc_info=True)
             df.to_sql(table, conn, index=False)
             logger.info(f"Loaded {p.name} into sqlite table {table} ({len(df)} rows)")
         except Exception as e:
@@ -108,5 +125,12 @@ def execute_select(sql: str, params: Optional[Dict[str, Any]] = None, max_rows: 
         # Count remaining rows if needed (cheap approximate)
         return {"columns": cols, "rows": results, "rowcount": len(results)}
     except Exception as e:
-        logger.exception(f"SQL execution failed: {e}")
-        raise
+        # Include the SQL (truncated) in the logged message to help debugging
+        try:
+            snippet = (sql[:1000] + '...') if sql and len(sql) > 1000 else (sql or '')
+        except Exception:
+            snippet = '<unavailable>'
+        logger.exception(f"SQL execution failed: {e}\nSQL: %s", snippet)
+        # Re-raise a more informative OperationalError so callers can catch specifically
+        import sqlite3 as _sqlite
+        raise _sqlite.OperationalError(f"{e}; SQL: {snippet}")

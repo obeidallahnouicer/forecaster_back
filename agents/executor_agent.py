@@ -20,14 +20,15 @@ class ExecutorAgent:
     def __init__(self):
         logger.info("ExecutorAgent initialized")
 
-    def execute(self, sql_query: str, validation_passed: bool = False) -> Dict[str, Any]:
+    def execute(self, sql_query: str, validation_passed: bool = False, params: Dict[str, Any] = None) -> Dict[str, Any]:
         if not validation_passed:
             logger.error("Execution blocked: SQL has not passed validation")
             return {"success": False, "error": "SQL execution rejected: validation_passed flag is False"}
 
         start = time.time()
         try:
-            result = execute_select(sql_query, params=None, max_rows=1000)
+            # Pass through named parameters to the DB execution
+            result = execute_select(sql_query, params=params, max_rows=10000000)
             elapsed = (time.time() - start) * 1000
 
             rows = result.get('rows', [])
@@ -46,7 +47,7 @@ class ExecutorAgent:
         return self.execute(sql_query, validation_passed=True)
 
 
-def execute_query(sql: str, params: Dict[str, Any] = None, max_rows: int = 500) -> Dict[str, Any]:
+def execute_query(sql: str, params: Dict[str, Any] = None, max_rows: int = 50000000) -> Dict[str, Any]:
     """
     Execute SQL query with optional parameters.
     

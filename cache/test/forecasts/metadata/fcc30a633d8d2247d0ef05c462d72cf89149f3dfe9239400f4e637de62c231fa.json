@@ -1,0 +1,18 @@
+{
+  "key": "forecast:article:ARTX:3277f189",
+  "created_at": 1761244205.7527995,
+  "updated_at": 1761244205.7527995,
+  "expires_at": 1761244265.7527995,
+  "version": "vtest",
+  "status": "completed",
+  "size_bytes": 318,
+  "hit_count": 1,
+  "last_accessed": 1761244205.7527995,
+  "tags": {
+    "ref_article": "ARTX",
+    "frequency": "yearly",
+    "type": "article",
+    "fingerprint": "b5a2c96250612366"
+  },
+  "checksum": "bdc0742a117f137149590d0f157f0d5e"
+}

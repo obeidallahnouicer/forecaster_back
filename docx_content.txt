@@ -1,0 +1,103 @@
+
+ TABLE CLIENT / QUESTIONS RELATIVES AUX CLIENTS :
+
+ Exemples de questions 
+ « Quels sont les clients inactifs depuis plus de 3 mois ? »
+ « Quel est le chiffre d’affaires moyen du client AYADI HOUWAIDA ? »
+ « Quels clients ont augmenté leurs achats de plus de 20 % cette année ? »
+ « Quels clients gère le commercial RABIAA BEN SEDRINE ? »
+ « Quels sont les clients à risque de perte ? »
+ « Top 10 des clients les plus fidèles ? »
+
+
+
+⚙️ Les indicateurs clés qu’elle contient
+
+Table PRODUITS
+💬 Elle répond à quelles questions ?
+
+
+⚙️ Colonnes / indicateurs clés à créer
+
+🧮 Règles métier (business rules)
+
+ Lien avec les autres tables
+
+ Exemples de questions 
+ « Quelle est la sous-famille la plus performante ce trimestre ? »
+ « Liste des produits H.ZONE en surstock. »
+ « Quels produits RENEE BLANCHE ont perdu plus de 15% de ventes ? »
+ « Quelle est la couverture de stock moyenne des shampooings ? »
+ « Quels articles ont une rotation faible depuis 3 mois ? »
+ « Quelle action recommandes-tu pour la famille Maquillage ? »
+
+🧩 Table VENTES_MENSUELLES
+Elle transforme les ventes journalières détaillées en indicateurs agrégés par mois, pour :
+détecter les tendances (hausse, baisse, stagnation),
+suivre la performance commerciale par client, marque, ou produit,
+et alimenter les alertes et recommandations automatiques.
+
+
+⚙️ Colonnes / indicateurs clés à créer
+
+
+
+
+
+
+🧮 Règles métier (calculs et interprétation)
+🧩 Lien avec les autres tables
+ Exemples de questions que le chatbot saura traiter
+« Quel est le chiffre d’affaires total du mois dernier ? »
+ « Quels clients ont perdu plus de 10 % de CA en octobre ? »
+ « Quelle famille de produits est en baisse depuis 3 mois ? »
+ « Quels produits n’ont pas été vendus depuis juin ? »
+ « Compare les ventes de septembre 2025 et septembre 2024. »
+ « Top 5 des sous-familles en croissance ce trimestre. »
+
+
+🧩 Table STOCK
+ Rôle général
+La table STOCK représente l’état des stocks à une date donnée (généralement en fin de mois).
+Elle sert à :
+mesurer la disponibilité réelle des produits,
+calculer les risques de rupture ou surstock,
+et piloter les actions d’ajustement logistique et commerciale.
+
+
+⚙️ Structure recommandée
+
+
+
+
+🧩 Lien avec les autres tables
+
+🤖 Exemples de questions chatbot
+« Quels produits ont un stock supérieur à 6 mois ? »
+ « Liste des articles en rupture ce mois-ci. »
+ « Quelle est la couverture de stock moyenne des shampooings ? »
+ « Pourquoi la famille Coiffage est en baisse ? Rupture ou désintérêt ? »
+« Quels articles nécessitent un réassort immédiat ? »
+ « Explique la situation du stock de ARGAN 500ML. »
+Table KPI_PERFORMANCE
+ Rôle général
+Elle résume toutes les analyses issues de la table ventes_mensuelles sous forme de KPI interprétables, d’alertes et de recommandations prêtes à communiquer.
+
+🧮 Règles métier (transformations et seuils)
+
+🧩 Table ACTIONS_RECOMMANDÉES
+C’est la table finale de décision générée à partir de kpi_performance.
+Elle contient les actions concrètes que le chatbot proposera aux responsables commerciaux, justifiées par des indicateurs.
+ KPI_PERFORMANCE → détecte les situations
+ ACTIONS_RECOMMANDÉES → propose quoi faire
+
+
+💬 Elle répond à quelles questions ?
+
+
+⚙️ Structure recommandée de la table
+
+
+🧮 Règles métier pour générer les actions
+
+
