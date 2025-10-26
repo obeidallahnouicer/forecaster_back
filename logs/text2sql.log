@@ -158,3 +158,114 @@
 2025-10-26 22:34:44,822 [INFO] text2sql: Generation attempt 3 for question: How many singers do we have?
 2025-10-26 22:34:44,824 [INFO] text2sql: Validation issues: ['Unknown identifier: Code_Client', 'Unknown identifier: clients', 'Unknown identifier: 5']
 2025-10-26 22:34:44,824 [WARNING] text2sql: SQL validation failed, retrying after 4.0s
+2025-10-26 22:36:03,028 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,028 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///C:\Users\onoui\AppData\Local\Temp\pytest-of-onoui\pytest-22\test_md_examples_execute0\clients.db
+2025-10-26 22:36:03,031 [INFO] text2sql: Using MockModel (MODEL_USE_MOCK=True)
+2025-10-26 22:36:03,031 [INFO] text2sql: Generation attempt 1 for question: Quels sont les clients inactifs depuis plus de 3 mois ?
+2025-10-26 22:36:03,032 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,032 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,033 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,034 [INFO] text2sql: Generation attempt 1 for question: Quel est le chiffre d’affaires moyen du client AYADI HOUWAIDA ?
+2025-10-26 22:36:03,035 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,036 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,037 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,037 [INFO] text2sql: Generation attempt 1 for question: Quels clients ont augmenté leurs achats de plus de 20 % cette année ?
+2025-10-26 22:36:03,038 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,039 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,039 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,040 [INFO] text2sql: Generation attempt 1 for question: Quels clients gère le commercial RABIAA BEN SEDRINE ?
+2025-10-26 22:36:03,042 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,042 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,043 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,044 [INFO] text2sql: Generation attempt 1 for question: Quels sont les clients à risque de perte ?
+2025-10-26 22:36:03,045 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,046 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,047 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,048 [INFO] text2sql: Generation attempt 1 for question: Top 10 des clients les plus fidèles ?
+2025-10-26 22:36:03,049 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,049 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,050 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,051 [INFO] text2sql: Generation attempt 1 for question: Qui est le client CL025 ?
+2025-10-26 22:36:03,052 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,053 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,055 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,055 [INFO] text2sql: Generation attempt 1 for question: Depuis quand ce client travaille avec nous ?
+2025-10-26 22:36:03,056 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,057 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,058 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,058 [INFO] text2sql: Generation attempt 1 for question: Quels clients sont inactifs depuis 6 mois ?
+2025-10-26 22:36:03,059 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,059 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,060 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,061 [INFO] text2sql: Generation attempt 1 for question: Quel est le CA moyen de ce client ?
+2025-10-26 22:36:03,062 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,062 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,063 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,064 [INFO] text2sql: Generation attempt 1 for question: Quels clients sont en croissance ou à fort potentiel ?
+2025-10-26 22:36:03,066 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,066 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,067 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,068 [INFO] text2sql: Generation attempt 1 for question: Quels clients ont chuté de plus de 20 % cette année ?
+2025-10-26 22:36:03,070 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,070 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,071 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,072 [INFO] text2sql: Generation attempt 1 for question: Combien de clients dans la catégorie GMS sont actifs ?
+2025-10-26 22:36:03,073 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,073 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,074 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,075 [INFO] text2sql: Generation attempt 1 for question: Quel commercial gère le plus de clients inactifs ?
+2025-10-26 22:36:03,076 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,076 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,077 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,078 [INFO] text2sql: Generation attempt 1 for question: Combien de clients ont acheté ce produit ce trimestre ?
+2025-10-26 22:36:03,079 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,079 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,080 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,081 [INFO] text2sql: Generation attempt 1 for question: Quels clients ont baissé leur chiffre d’affaires en octobre ?
+2025-10-26 22:36:03,082 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,082 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,083 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,084 [INFO] text2sql: Generation attempt 1 for question: Quels clients ont perdu plus de 10 % de CA en octobre ?
+2025-10-26 22:36:03,085 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,085 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:03,086 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:03,086 [INFO] text2sql: Generation attempt 1 for question: Que faire pour le client BEN ZIDI ?
+2025-10-26 22:36:03,087 [INFO] text2sql: Validation issues: []
+2025-10-26 22:36:03,088 [INFO] text2sql: Executing SQL: SELECT COUNT(*) AS count FROM clients;
+2025-10-26 22:36:12,521 [INFO] text2sql: Loading DB schema
+2025-10-26 22:36:12,522 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:36:12,680 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:37:09,250 [INFO] text2sql: Loading DB schema
+2025-10-26 22:37:09,250 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:37:09,320 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:37:15,259 [INFO] text2sql: Loading DB schema
+2025-10-26 22:37:15,260 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:37:15,260 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:37:17,036 [INFO] text2sql: Loading DB schema
+2025-10-26 22:37:17,036 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:37:17,038 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:37:19,090 [INFO] text2sql: Loading DB schema
+2025-10-26 22:37:19,091 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:37:19,092 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:37:19,518 [INFO] text2sql: Loading DB schema
+2025-10-26 22:37:19,518 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:37:19,519 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:37:20,860 [INFO] text2sql: Loading DB schema
+2025-10-26 22:37:20,861 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:37:20,862 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:37:29,153 [INFO] text2sql: Loading DB schema
+2025-10-26 22:37:29,153 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:37:29,156 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:38:09,094 [INFO] text2sql: Loading DB schema
+2025-10-26 22:38:09,096 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:38:09,097 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:38:09,559 [INFO] text2sql: Loading DB schema
+2025-10-26 22:38:09,560 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:38:09,561 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:38:18,258 [INFO] text2sql: Loading DB schema
+2025-10-26 22:38:18,259 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:38:18,261 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU
+2025-10-26 22:38:59,712 [INFO] text2sql: Auto-correcting identifier Snger_ID -> Snger_ID (score=0.0)
+2025-10-26 22:40:48,251 [INFO] text2sql: Loading DB schema
+2025-10-26 22:40:48,252 [INFO] text2sql: Creating SQLAlchemy engine for sqlite:///:memory:
+2025-10-26 22:40:48,328 [INFO] text2sql: Loading model 'Chat2DB/Chat2DB-SQL-7B' on device CPU

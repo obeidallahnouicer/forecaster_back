@@ -105,38 +105,27 @@ def generate_sql_from_question(
       - raw: raw LLM content
       - meta: the raw get_llm_response return value for debugging
     """
-    # Try to use RAG-based generator if available and enabled and business rules file present.
-    if _RAG_ENABLED:
-        try:
-            chunks, embeddings = _load_or_build_embeddings()
-            rag = RAGSQLGenerator(chunks, embeddings)
-            rag_out = rag.generate_sql(question, top_k=4, temperature=0.0)
-            # rag.generate_sql may return either a plain SQL string (legacy) or
-            # a tuple (sql, params). Handle both shapes for backwards compat.
-            if isinstance(rag_out, tuple) and len(rag_out) == 2:
-                sql_text, params = rag_out
-            else:
-                sql_text, params = (rag_out or "", {})
+    # Prefer the new text2sql QueryAgent for SQL generation (Chat2DB backend).
+    # This enforces using Chat2DB/Chat2DB-SQL-7B (or the configured local model)
+    # for producing SQL while leaving the generic LLM client available for
+    # non-SQL insights.
+    try:
+        from text2sql.agent import QueryAgent as Text2SQLAgent
 
-            return {
-                "reasoning": "RAG-generated SQL using business rules",
-                "sql_query": sql_text or "",
-                "params": params or {},
-                "raw": sql_text or "",
-                "meta": {"method": "rag"},
-            }
-        except FileNotFoundError:
-            # no rules file; fall back to prompt-based approach
-            logger.debug("RAG rules file not found; falling back to prompt-based generation.")
-        except Exception as e:
-            # If RAG generation fails for any reason, fall back quietly to existing flow
-            logger.exception("RAG generation failed, falling back to prompt-based: %s", e)
-            pass
-    else:
-        if _HAS_RAG:
-            logger.debug("RAG available but disabled via ENABLE_RAG=0")
-        else:
-            logger.debug("RAG not available in this environment")
+        agent = Text2SQLAgent()
+        # generate_and_run returns a dict with keys 'sql' and 'rows'
+        res = agent.generate_and_run(question)
+        sql_text = res.get("sql") or ""
+        # Provide a normalized response shape similar to the old adapter
+        return {
+            "reasoning": "SQL generated via text2sql QueryAgent (Chat2DB)",
+            "sql_query": sql_text,
+            "params": {},
+            "raw": sql_text,
+            "meta": {"method": "text2sql"},
+        }
+    except Exception:
+        logger.debug("text2sql QueryAgent not available or failed; falling back to legacy RAG/prompt flow")
 
     # Fallback: original prompt-based generation
     prompt = sg.build_sql_generation_prompt(question, sample_rows, stock_columns)
