@@ -8,7 +8,18 @@ logical helper tables (e.g., `t_clients`) are not present.
 """
 
 from typing import List, Dict, Optional
-from langchain_core.prompts import PromptTemplate
+try:
+    from langchain_core.prompts import PromptTemplate
+except Exception:
+    # Minimal local fallback for PromptTemplate so the module can be imported
+    # in environments where langchain_core is not installed (tests, CI).
+    class PromptTemplate:
+        def __init__(self, input_variables=None, template=""):
+            self.input_variables = input_variables or []
+            self.template = template
+
+        def format(self, **kwargs):
+            return self.template.format(**kwargs)
 from core.schema_loader import get_schema_snapshot
 
 # The only allowed columns for `ventes_cleann` as provided by the original design
@@ -65,7 +76,16 @@ SQL_SYSTEM_PROMPT = (
     "entity (for example 'clients' or 'products') and no helper table (e.g., t_clients) exists, compute the requested\n"
     "metrics by aggregating from the available physical sales table(s) (for example `t_ventes_cleann`) using only the\n"
     "columns shown in the schema. Always explain when you derived values instead of using a dedicated helper table.\n"
-    "Map sales/revenue to CA_HT_NET and quantities to Qte_Vendu. Return only JSON with keys: sql, params, explanation."
+    "Map sales/revenue to CA_HT_NET and quantities to Qte_Vendu.\n"
+    "IMPORTANT: For any numeric columns that may be stored as text (commas, empty strings, nulls, or scientific notation),\n"
+    "use SQL expressions that safely convert values, e.g. COALESCE(NULLIF(col, ''), '0'), REPLACE(col, ',', '.') and CAST(... AS NUMERIC).\n"
+    "Return ONLY a single JSON object (no markdown, no commentary) with the EXACT keys: reasoning, sql_query, params.\n"
+    "- `reasoning` (string): brief step-by-step reasoning describing which physical tables/columns and expressions you used.\n"
+    "- `sql_query` (string): a single SELECT statement that uses only the physical table and column names from the AVAILABLE TABLES block.\n"
+    "- `params` (object): an object of named parameter values (use named parameters like :since_date).\n"
+    "If you cannot produce a valid SELECT using only the available tables/columns, return a JSON object with `sql_query` set to an empty string and put the explanation in `reasoning`.\n"
+    "Do NOT include any text before or after the JSON object. The JSON object must start with '{' as the very first character of your response.\n"
+    "The SQL must be valid SQLite and must NOT include multiple statements."
 )
 
 
@@ -116,7 +136,7 @@ SQL_GENERATION_TEMPLATE = (
     "7) Group by categorical columns when aggregating and include ORDER/LIMIT for top-N queries.\n"
     "8) Apply business rules when relevant (inactive clients: Mois_Depuis_Derniere_Vente >= 3,\n"
     "   stock alerts: Couverture_Stock < 1 or > 6, sales decline: Variation_CA_% < -10).\n"
-    "9) Return valid JSON with keys: sql, params, explanation.\n\n"
+    "9) Return valid JSON with keys: reasoning, sql_query, params.\n\n"
 
     "AVAILABLE TABLES AND COLUMNS (physical names):\n{schema}\n\n"
     "MACHINE-READABLE SCHEMA (JSON) - MUST be used by the model to select exact column names:\n{json_schema}\n\n"
@@ -132,9 +152,9 @@ SQL_GENERATION_TEMPLATE = (
     "USER QUESTION: {question}\n\n"
 
     "OUTPUT: Return ONLY valid JSON with this structure:\n"
-    "- sql: SELECT statement string\n"
-    "- params: object with parameter values\n"
-    "- explanation: brief explanation string\n\n"
+    "- reasoning: brief explanation string describing your logic and which physical tables/expressions you used (short).\n"
+    "- sql_query: a single SELECT statement string that uses only the physical table/column names shown above.\n"
+    "- params: object with parameter values (use named parameters like :param_name).\n\n"
 
     "If the exact logical table requested by the user does not exist, compute the answer\n"
     "by aggregating from the appropriate physical tables and clearly document this in the explanation. DO NOT reference or create\n"
@@ -143,9 +163,16 @@ SQL_GENERATION_TEMPLATE = (
     "\nEXAMPLES (few-shot):\n"
     "# Example 1 - user asks top seller by number of distinct clients in last 6 months\n"
     "# Available tables: t_ventes_cleann with columns [Code_Client, Representant, Date, CA_HT_NET, ...]\n"
-    "# Correct JSON response (only SELECT using physical table and exact column names):\n"
-    "{{\n  \"sql\": \"SELECT Representant, COUNT(DISTINCT Code_Client) AS nb_clients FROM t_ventes_cleann WHERE Date >= :since_date GROUP BY Representant ORDER BY nb_clients DESC LIMIT 10\",\n"
-        "  \"params\": {{\"since_date\": \"2025-04-01\"}},\n  \"explanation\": \"Aggregated from t_ventes_cleann using exact column names; computed since_date as 6 months ago.\"\n}}\n"
+    "# Correct JSON response (ONLY the JSON object; keys must be reasoning, sql_query, params):\n"
+    "{{\n  \"reasoning\": \"Aggregated from t_ventes_cleann using exact column names; computed since_date as 6 months ago.\",\n"
+    "  \"sql_query\": \"SELECT Representant, COUNT(DISTINCT Code_Client) AS nb_clients FROM t_ventes_cleann WHERE Date >= :since_date GROUP BY Representant ORDER BY nb_clients DESC LIMIT 10\",\n"
+    "  \"params\": {{\"since_date\": \"2025-04-01\"}}\n}}\n"
+    "# Example 2 - numeric-safe casting example when amounts may be text with commas\n"
+    "# User: 'Show top products by revenue last month'\n"
+    "# Correct JSON response demonstrating numeric-safe cast in SQL:\n"
+    "{{\n  \"reasoning\": \"Summed CA_HT_NET after replacing comma decimals and casting to numeric; using t_ventes_cleann.\",\n"
+    "  \"sql_query\": \"SELECT Ref_Article, SUM(CAST(REPLACE(COALESCE(NULLIF(CA_HT_NET, ''), '0'), ',', '.') AS NUMERIC)) AS total_revenue FROM t_ventes_cleann WHERE Date >= :since_date GROUP BY Ref_Article ORDER BY total_revenue DESC LIMIT 10\",\n"
+    "  \"params\": {{\"since_date\": \"2025-09-01\"}}\n}}\n"
     "# Never reference tables that are not listed above (e.g., do NOT use t_clients).\n"
 )
 

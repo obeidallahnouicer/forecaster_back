@@ -107,6 +107,9 @@ SUPPORTED_FILE_TYPES = [".csv", ".xlsx", ".xls"]
 # Agent timeout (seconds)
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", 30))
 
+# Number of LLM retry attempts when fixing generated SQL that fails validation
+LLM_RETRY_ATTEMPTS = int(os.getenv("LLM_RETRY_ATTEMPTS", "3"))
+
 # ============================================================================
 # FORECASTING SETTINGS
 # ============================================================================

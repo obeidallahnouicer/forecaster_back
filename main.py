@@ -1,3 +1,84 @@
+"""main.py
+
+Orchestrator example demonstrating how to build embeddings from business rules
+markdown and generate a safe SQL query using RAG + LLM.
+
+This script is intended as an example and simple test harness. It:
+ - Locates the business rules markdown file (tries a few common names).
+ - Builds embeddings and an in-memory retrieval index.
+ - Runs an example query and prints the SQL produced by the LLM.
+ - Validates the SQL with `sql_validator`.
+
+Before running:
+ - Install dependencies: sentence-transformers (optional) and openai (if using OpenAI).
+ - If using OpenAI, set environment variable OPENAI_API_KEY.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from typing import List
+
+from tools.rag.embed_rules import build_embeddings_from_file
+from tools.rag.rag_sql_generator import RAGSQLGenerator
+from tools.rag.rag_sql_validator import enforce_sql_format
+
+
+def find_rules_file() -> str:
+    """Try to find the business rules markdown file in the repo root.
+
+    Looks for `TABLE_Chatbot.md` or `TABLE Chatbot.md` (the project contains
+    `TABLE Chatbot.md` with a space). If not found, raise FileNotFoundError.
+    """
+    candidates = ["TABLE_Chatbot.md", "TABLE Chatbot.md", "TABLE Chatbot.MD", "TABLE_Chatbot.MD"]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    raise FileNotFoundError("Could not find business rules markdown file (looked for TABLE_Chatbot.md or TABLE Chatbot.md)")
+
+
+def run_example(query: str) -> None:
+    """Run the RAG SQL generator pipeline for an example query and print results.
+
+    Args:
+        query: Natural language query to convert to SQL.
+    """
+    rules_path = find_rules_file()
+    print(f"Loading business rules from {rules_path}...\n")
+    chunks, embeddings = build_embeddings_from_file(rules_path)
+
+    print(f"Built {len(chunks)} chunks and embeddings. Initializing RAG generator...\n")
+    rag = RAGSQLGenerator(chunks, embeddings)
+
+    print(f"Generating SQL for query: {query}\n")
+    sql = rag.generate_sql(query)
+    # rag.generate_sql may return (sql, params) tuple or plain string
+    if isinstance(sql, tuple) and len(sql) == 2:
+        sql_text, sql_params = sql
+    else:
+        sql_text, sql_params = (sql or "", {})
+
+    ok, normalized = enforce_sql_format(sql_text)
+    if not ok:
+        print("Generated SQL failed safety checks. Output was:\n")
+        print(sql)
+        sys.exit(2)
+
+    # show SQL (comments allowed) and a short message
+    print("--- GENERATED SQL (validated) ---\n")
+    print(normalized)
+    print("\n--- End SQL ---\n")
+
+
+if __name__ == "__main__":
+    # Example queries. Replace with other NL queries as needed.
+    examples: List[str] = [
+        "Quels clients sont inactifs depuis 6 mois ?",
+        "Quels produits ont un stock supérieur à 6 mois ?",
+    ]
+
+    # Run first example by default
+    run_example(examples[0])
 """
 Sales Forecaster & Business Intelligence API - LangChain + Guardrails Edition
 

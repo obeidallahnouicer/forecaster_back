@@ -9,7 +9,7 @@ to be installed. The agent returns structured dicts indicating where
 validation failed or succeeded.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Set
 import logging
 
 from core import config
@@ -23,6 +23,9 @@ from core.db_connection import execute_select
 from typing import Any
 import datetime
 import sqlite3
+from pathlib import Path
+import difflib
+import unicodedata
 
 
 def _extract_identifiers_from_sql(sql: str) -> set:
@@ -34,12 +37,21 @@ def _extract_identifiers_from_sql(sql: str) -> set:
     # Collect candidate identifiers from common SQL clauses: SELECT, GROUP BY, ORDER BY
     cols = set()
 
+    # Collect alias names declared in the query so we can ignore them as identifiers.
+    alias_names = set()
+    for am in re.finditer(r"\bAS\s+([A-Za-z_][A-Za-z0-9_]*)", sql, flags=re.IGNORECASE):
+        alias_names.add(am.group(1))
+    for am in re.finditer(r"\)[\s\n]*([A-Za-z_][A-Za-z0-9_]*)", sql):
+        alias_names.add(am.group(1))
+
     # capture between SELECT and FROM (likely column list)
     m = re.search(r"select(.*?)from", sql, flags=re.IGNORECASE | re.S)
     if m:
         select_part = m.group(1)
         cand = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ_][A-Za-z0-9_À-ÖØ-öø-ÿ]*", select_part)
         cols.update(cand)
+        # Remove aliases found in the whole SQL from the collected select tokens
+        cols = cols.difference(alias_names)
 
     # capture GROUP BY and ORDER BY lists
     for clause in (r"group\s+by(.*?)(order|limit|having|$)", r"order\s+by(.*?)(limit|$)"):
@@ -47,6 +59,9 @@ def _extract_identifiers_from_sql(sql: str) -> set:
             part = mm.group(1)
             cand = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ_][A-Za-z0-9_À-ÖØ-öø-ÿ]*", part)
             cols.update(cand)
+        # Remove any alias names from group/order tokens as they are not real table/column identifiers
+        if alias_names:
+            cols = cols.difference(alias_names)
 
     # capture table names in FROM and JOIN clauses (including alias forms)
     # e.g., FROM t_ventes_cleann v, JOIN t_stock s ON ...
@@ -119,79 +134,53 @@ class QueryAgent:
                 "detected_pii": pii_result.detected_types,
             }
 
-        # Stage 2: LLM generation (lazy import)
+        # Stage 2: LLM generation (STRICT: delegate to llm.sql_agent and accept ONLY its SQL)
         sql_text = None
-        if not config.GROQ_API_KEY:
-            logger.warning("GROQ_API_KEY not set - LLM disabled")
-            return {
-                "success": False,
-                "validation_stage": "llm_generation",
-                "error": "LLM not configured (missing GROQ_API_KEY)",
-            }
+        sql_params = {}
+        explanation = ""
 
         try:
-            # Lazy import to avoid hard dependency at module import time
-            from langchain_core.prompts import ChatPromptTemplate
-            from langchain_groq import ChatGroq
+            from llm import sql_agent as llm_sql_agent
+            resp = llm_sql_agent.generate_sql_from_question(question, sample_rows=[])
+            explanation = resp.get("reasoning") or ""
+            sql_text = resp.get("sql_query") or ""
+            sql_params = resp.get("params") or {}
 
-            # generate file-schema to provide machine-readable columns for validation
-            file_schema = generate_file_schema()
-
-            # Provide a machine-readable JSON schema block expected by the prompt
-            try:
-                from prompts.sql_generation import build_json_schema_from_snapshot
-                json_schema = build_json_schema_from_snapshot(limit_sample=1)
-            except Exception:
-                json_schema = None
-
-            # Build chat prompt with system message + human template
-            chat_prompt = ChatPromptTemplate.from_messages([
-                ("system", SQL_SYSTEM_PROMPT),
-                ("human", self.prompt_template)
-            ])
-
-            # Build a very small chain using ChatGroq directly
-            llm = ChatGroq(model=config.GROQ_MODEL, api_key=config.GROQ_API_KEY, temperature=0.1)
-            formatted = chat_prompt.format_messages(schema=self.schema, question=question, file_schema=file_schema, json_schema=json_schema)
-            # Use invoke() with the formatted messages
-            response = llm.invoke(formatted)
-            # Extract content from the response
-            sql_text = response.content if hasattr(response, 'content') else str(response)
-        except Exception as e:
-            logger.exception("LLM generation error")
-            # Try a lightweight heuristic fallback for simple queries when LLM fails
-            try:
-                fallback = self._heuristic_sql_from_question(question)
-                if fallback:
-                    sql_text = fallback
-                else:
-                    return {
-                        "success": False,
-                        "validation_stage": "llm_generation",
-                        "error": f"LLM generation failed: {e}",
-                    }
-            except Exception:
+            # Enforce strict behavior: if adapter didn't return a SELECT, return error immediately
+            if not sql_text:
                 return {
                     "success": False,
                     "validation_stage": "llm_generation",
-                    "error": f"LLM generation failed: {e}",
+                    "error": "LLM did not return a valid SELECT query",
+                    "llm_reasoning": explanation,
+                    "llm_raw": resp.get("raw"),
+                    "llm_meta": resp.get("meta"),
                 }
 
-        # Clean the LLM output
+        except Exception as e:
+            logger.exception("LLM generation (adapter) error")
+            return {
+                "success": False,
+                "validation_stage": "llm_generation",
+                "error": f"LLM generation failed: {e}",
+            }
+
+        # Clean the SQL text produced by the adapter or fallback
         sql_text = self._clean_sql(sql_text)
-        
-        # Try to parse JSON response (LLM should return {"sql": "...", "params": {...}, "explanation": "..."})
-        sql_params = {}
+
+        # If params are not present yet, try to extract JSON from the LLM text (legacy fallback)
+        sql_params = sql_params or {}
         try:
             import json
-            # Try to extract JSON from response
-            json_match = re.search(r'\{.*\}', sql_text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group(0))
-                if isinstance(parsed, dict) and 'sql' in parsed:
-                    sql_text = parsed.get('sql', '')
-                    sql_params = parsed.get('params', {})
-                    explanation = parsed.get('explanation', '')
+            # Only attempt legacy JSON extraction if we don't already have params
+            if not sql_params:
+                json_match = re.search(r'\{.*\}', sql_text, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group(0))
+                    if isinstance(parsed, dict) and 'sql' in parsed:
+                        sql_text = parsed.get('sql', '')
+                        sql_params = parsed.get('params', {}) or {}
+                        explanation = parsed.get('explanation', '')
         except Exception:
             pass  # If JSON parsing fails, use sql_text as-is
 
@@ -233,127 +222,239 @@ class QueryAgent:
                 unknown_identifiers.append(ident)
 
             if unknown_identifiers:
-                msg = f"Generated SQL references unknown identifiers: {unknown_identifiers}.\nPlease regenerate using only the exact table and column names from the schema block."
+                msg = f"Generated SQL references unknown identifiers: {unknown_identifiers}."
                 logger.error(msg)
 
-                # Attempt one-shot automatic re-prompt: ask the LLM to rewrite the SQL
-                # using only the exact physical table and column names provided in the
-                # schema block. This gives the LLM a chance to correct hallucinated
-                # identifiers without creating compatibility tables.
-                if config.GROQ_API_KEY:
-                    try:
-                        # prepare machine-readable schema and file schema for the rewrite prompt
-                        file_schema = generate_file_schema()
-                        try:
-                            from prompts.sql_generation import build_json_schema_from_snapshot
-                            json_schema = build_json_schema_from_snapshot(limit_sample=1)
-                        except Exception:
-                            json_schema = None
-
-                        # Lazy import LLM classes
-                        from langchain_core.prompts import ChatPromptTemplate
-                        from langchain_groq import ChatGroq
-
-                        rewrite_system = (
-                            "You were asked to produce a single SELECT statement in JSON form. "
-                            "The previous SQL referenced identifiers that do not exist in the database. "
-                            "Here is the exact schema (human readable):\n" + self.schema + "\n\n"
-                        )
-
-                        rewrite_human = (
-                            "Please rewrite the SQL to produce the same intent but use ONLY the exact "
-                            "table and column names present in the schema block below. Return a JSON object with keys: \"sql\", \"params\" (object) and \"explanation\" (string). "
-                            "Do not invent tables or columns. If you cannot express the intent using the schema, return an empty sql string.\n\n"
-                            f"Schema (human):\n{self.schema}\n\n"
-                        )
-
-                        # include machine-readable json schema when available
-                        if json_schema:
-                            rewrite_human += f"Schema (json):\n{json_schema}\n\n"
-
-                        rewrite_human += f"Original SQL: {sql_text}\n\nOriginal question: {question}"
-
-                        # Avoid template formatting of raw JSON by passing plain messages
-                        llm = ChatGroq(model=config.GROQ_MODEL, api_key=config.GROQ_API_KEY, temperature=0.0)
-                        messages = [
-                            {"role": "system", "content": rewrite_system},
-                            {"role": "user", "content": rewrite_human},
-                        ]
-                        resp = llm.invoke(messages)
-                        new_text = resp.content if hasattr(resp, 'content') else str(resp)
-                        new_text = self._clean_sql(new_text)
-
-                        # Attempt to parse JSON from the rewrite response
-                        try:
-                            jmatch = re.search(r'\{.*\}', new_text, re.DOTALL)
-                            if jmatch:
-                                import json as _json
-                                parsed = _json.loads(jmatch.group(0))
-                                if isinstance(parsed, dict) and 'sql' in parsed:
-                                    sql_text = parsed.get('sql', '')
-                                    sql_params = parsed.get('params', {}) or {}
-                                    explanation = parsed.get('explanation', '')
-                        except Exception:
-                            logger.exception("Failed to parse rewritten SQL JSON from LLM")
-
-                        # Re-run syntactic validation on rewritten SQL
-                        sql_result = self.sql_validator.validate(sql_text)
-                        if not sql_result.is_valid:
-                            logger.error("Rewritten SQL failed validation")
-                            # fall through to return the original validation error below
-                        else:
-                            # Re-check identifiers against snapshot; if clean, continue execution
-                            snap2 = get_schema_snapshot(limit_sample=0)
-                            known_tables2 = {t.lower(): {c.lower() for c in info.get('columns', [])} for t, info in snap2.get('tables', {}).items()}
-                            identifiers2 = _extract_identifiers_from_sql(sql_result.normalized_sql or sql_text)
-                            unknown2 = [i for i in identifiers2 if not (i.lower() in known_tables2 or any(i.lower() in cols for cols in known_tables2.values()))]
-                            if not unknown2:
-                                # Accept rewritten SQL
-                                logger.info("LLM rewrite produced SQL using known identifiers; proceeding to execution")
-                                # update sql_result and continue on to execution path
-                                # Note: sql_result already set for rewritten SQL
-                                pass
-                            else:
-                                logger.error("Rewritten SQL still references unknown identifiers: %s", unknown2)
-                    except Exception:
-                        logger.exception("Automatic LLM rewrite attempt failed")
-
-                # If we reach here and haven't accepted a rewritten SQL, return the validation error
-                # Attempt a local heuristic fix before failing: build a safe SQL using known tables/columns
+                # Try a quick automatic fix using normalization + fuzzy matching before
+                # invoking the LLM-driven retry flow. This often fixes issues like
+                # accent differences, casing, or small typos (e.g., Intitulé_Client -> Intitule_Client).
                 try:
-                    local_fix = self._local_fix_for_unknown_identifiers(sql_text, question)
-                    if local_fix:
-                        # validate and, if valid, execute the fix
-                        val = self.sql_validator.validate(local_fix)
-                        if val.is_valid:
-                            mapped_sql = self._map_logical_table_names(val.normalized_sql or local_fix)
-                            try:
-                                exec_res = execute_select(mapped_sql, params={}, max_rows=10)
-                                return {
-                                    "success": True,
-                                    "validation_stage": "completed",
-                                    "sql": mapped_sql,
-                                    "original_sql": sql_text,
-                                    "message": "SQL generated, validated and executed (local heuristic fix applied)",
-                                    "params": {},
-                                    "explanation": f"Local heuristic correction applied for: {question}",
-                                    "columns": exec_res.get('columns', []),
-                                    "rows_preview": exec_res.get('rows', [])[:10],
-                                    "rowcount": exec_res.get('rowcount', 0),
-                                }
-                            except Exception:
-                                # if execution fails, fall through to return error
-                                logger.exception("Execution of local heuristic fix failed")
-                except Exception:
-                    logger.exception("Local heuristic fix attempt failed")
+                    def _normalize(s: str) -> str:
+                        s = s or ''
+                        # Unicode normalize and remove diacritics
+                        s = unicodedata.normalize('NFKD', s)
+                        s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+                        s = s.lower()
+                        # replace non-alnum with underscore
+                        s = re.sub(r'[^a-z0-9]+', '_', s)
+                        s = s.strip('_')
+                        return s
 
-                return {
-                    "success": False,
-                    "validation_stage": "output_validation",
-                    "error": msg,
-                    "generated_sql": sql_text,
-                    "unknown_identifiers": unknown_identifiers,
-                }
+                    # Build candidate list: table names and columns flattened
+                    flat_candidates = {}
+                    for t, cols in known_tables.items():
+                        flat_candidates[t] = t
+                        for c in cols:
+                            flat_candidates[c] = c
+
+                    mappings = {}
+                    for ident in list(unknown_identifiers):
+                        norm = _normalize(ident)
+                        # exact normalized match
+                        found = None
+                        for cand in flat_candidates.keys():
+                            if _normalize(cand) == norm:
+                                found = flat_candidates[cand]
+                                break
+                        # fuzzy match fallback
+                        if not found:
+                            choices = list(flat_candidates.keys())
+                            close = difflib.get_close_matches(ident, choices, n=1, cutoff=0.7)
+                            if close:
+                                found = flat_candidates[close[0]]
+
+                        if found and found != ident:
+                            mappings[ident] = found
+
+                    # If we found mappings, apply textual replacements (word-boundary)
+                    if mappings:
+                        new_sql = sql_result.normalized_sql or sql_text
+                        for orig, replacement in mappings.items():
+                            # replace occurrences with exact replacement (preserve case of replacement)
+                            new_sql = re.sub(rf"\b{re.escape(orig)}\b", replacement, new_sql)
+
+                        logger.info("Auto-corrected identifiers using fuzzy mapping: %s", mappings)
+                        # Update sql_text and continue without triggering LLM retries
+                        sql_text = new_sql
+                        sql_params = sql_params or {}
+                    else:
+                        # If no mapping found, fall back to LLM retry mechanism below
+                        pass
+
+                except Exception:
+                    # If auto-fix failed for any reason, continue to LLM-driven retries
+                    logger.exception("Auto identifier-fix failed; falling back to LLM retries")
+
+                # Attempt to have the LLM regenerate corrected SQL using only the schema
+                # Try a limited number of retries where we ask the model to fix the query.
+                try:
+                    # Ensure we have access to the adapter
+                    try:
+                        from llm import sql_agent as llm_sql_agent
+                    except Exception:
+                        llm_sql_agent = None
+
+                    # Read max retries from config (fallback to 2)
+                    max_retries = getattr(config, 'LLM_RETRY_ATTEMPTS', 2)
+                    retry_attempts = []
+                    fixed_sql = None
+                    fixed_params = {}
+                    fixed_reasoning = None
+
+                    # Keep the original failing SQL and reasoning to show the model what to fix
+                    original_sql = sql_result.normalized_sql or sql_text
+                    original_reasoning = explanation or ""
+
+                    for attempt in range(max_retries):
+                        if llm_sql_agent is None:
+                            break
+
+                        # Try to include the project's TABLE Chatbot.md as contextual schema/business rules
+                        table_md = None
+                        try:
+                            # Project root is two levels up from this file
+                            repo_root = Path(__file__).resolve().parents[1]
+                            md_path = repo_root / "TABLE Chatbot.md"
+                            if md_path.exists():
+                                table_md = md_path.read_text(encoding="utf-8")
+                        except Exception:
+                            table_md = None
+
+                        # Build retry note: include failing identifiers, the failing SQL and prior reasoning,
+                        # plus the project's TABLE Chatbot.md (larger excerpt) and the original raw LLM output
+                        # so the model can see exactly what was returned and how to fix it.
+                        md_excerpt = None
+                        if table_md:
+                            # include more of the MD file (up to 20k chars) to give richer context
+                            md_excerpt = table_md if len(table_md) <= 20000 else table_md[:20000] + "\n...\n"
+                        else:
+                            md_excerpt = "(TABLE Chatbot.md not available)"
+
+                        # include the original raw LLM output if available to help the model understand format
+                        original_raw = ''
+                        try:
+                            original_raw = resp.get('raw') or resp.get('content') or ''
+                        except Exception:
+                            original_raw = ''
+
+                        # Append a machine-readable JSON schema excerpt to the retry prompt to force
+                        # the model to use exact table/column names. We limit the size to avoid huge prompts.
+                        try:
+                            import json as _json
+                            snap_for_json = get_schema_snapshot(limit_sample=1)
+                            schema_obj = {t: info.get('columns', []) for t, info in snap_for_json.get('tables', {}).items()}
+                            json_schema = _json.dumps(schema_obj, ensure_ascii=False, indent=2)
+                            if len(json_schema) > 10000:
+                                json_schema = json_schema[:10000] + "\n...\n"
+                        except Exception:
+                            json_schema = "(schema JSON not available)"
+
+                        # Add concrete correction examples that map invented aliases to explicit SQL expressions
+                        correction_examples = (
+                            "Examples of corrective substitutions:\n"
+                            "- purchase_frequency -> COUNT(DISTINCT Date) AS purchase_frequency\n"
+                            "- months_active -> COUNT(DISTINCT substr(Date,1,7)) AS months_active\n"
+                            "- total_qty -> SUM(CAST(REPLACE(COALESCE(NULLIF(Qte_Vendu, ''), '0'), ',', '.') AS NUMERIC)) AS total_qty\n"
+                        )
+
+                        retry_note = (
+                            f"Previous SQL failed validation because it referenced unknown identifiers: {unknown_identifiers}."
+                            " Please regenerate a corrected SQL using ONLY the exact table and column names listed in the AVAILABLE TABLES block."
+                            " Return the JSON object with keys reasoning, sql_query, params (no extra text)."
+                            "\n\nThe failing SQL was:\n" f"{original_sql}\n\n"
+                            "The model reasoning provided previously was:\n" f"{original_reasoning}\n\n"
+                            "The original raw model output was:\n" f"{original_raw}\n\n"
+                            f"{correction_examples}"
+                            "Refer to this PROJECT TABLE + BUSINESS RULES content to select exact column names and indicators:\n"
+                            f"{md_excerpt}\n\n"
+                            "MACHINE-READABLE SCHEMA (partial):\n"
+                            f"{json_schema}"
+                        )
+                        # Append the retry note to the original question so the prompt includes context
+                        retry_question = f"{question}\n\n{retry_note}"
+
+                        resp_retry = llm_sql_agent.generate_sql_from_question(retry_question, sample_rows=[])
+                        # timestamp and record the attempt for debugging
+                        ts = datetime.datetime.utcnow().isoformat() + 'Z'
+                        attempt_record = {
+                            'attempt': attempt + 1,
+                            'timestamp': ts,
+                            'response': resp_retry,
+                        }
+                        retry_attempts.append(attempt_record)
+                        logger.debug("LLM retry attempt %d at %s: %s", attempt + 1, ts, resp_retry)
+
+                        # extract candidate SQL and reasoning from the model's response
+                        candidate_sql = (resp_retry.get("sql_query") or "").strip()
+                        candidate_sql = self._clean_sql(candidate_sql)
+                        candidate_reasoning = resp_retry.get('reasoning') or resp_retry.get('explanation') or ''
+                        # enrich the last attempt record with parsed candidate info
+                        retry_attempts[-1].update({'candidate_sql': candidate_sql, 'candidate_reasoning': candidate_reasoning})
+
+                        # Quick validation of the candidate SQL
+                        try:
+                            candidate_result = self.sql_validator.validate(candidate_sql)
+                        except Exception:
+                            candidate_result = None
+
+                        # If SQL validation fails, continue to next attempt
+                        if candidate_result is None or not getattr(candidate_result, 'is_valid', False):
+                            # log invalid candidate result and continue
+                            logger.debug("Candidate SQL failed sql_validator on attempt %d", attempt + 1)
+                            continue
+
+                        # Check identifiers again against known_tables
+                        cand_identifiers = _extract_identifiers_from_sql(candidate_result.normalized_sql or candidate_sql)
+                        cand_unknown = []
+                        for ident in cand_identifiers:
+                            low = ident.lower()
+                            if low in known_tables:
+                                continue
+                            if any(low in cols for cols in known_tables.values()):
+                                continue
+                            cand_unknown.append(ident)
+
+                        if not cand_unknown:
+                            # success: use this SQL and proceed
+                            fixed_sql = candidate_result.normalized_sql or candidate_sql
+                            fixed_params = resp_retry.get('params') or {}
+                            fixed_reasoning = candidate_reasoning or ''
+                            break
+                        else:
+                            # prepare for next retry with updated unknown list
+                            unknown_identifiers = cand_unknown
+                            logger.debug("Candidate still references unknown identifiers on attempt %d: %s", attempt + 1, cand_unknown)
+
+                    # If we obtained a fixed SQL, replace sql_text and sql_params and continue
+                    if fixed_sql:
+                        sql_text = fixed_sql
+                        sql_params = fixed_params or {}
+                        explanation = fixed_reasoning or explanation
+                    else:
+                        # retries exhausted; return structured error including attempts
+                        full_msg = (
+                            f"Generated SQL references unknown identifiers after {max_retries} retry attempts: {unknown_identifiers}. "
+                            "LLM attempted regenerations are included in `llm_attempts`."
+                        )
+                        logger.error(full_msg)
+                        return {
+                            "success": False,
+                            "validation_stage": "output_validation",
+                            "error": full_msg,
+                            "generated_sql": sql_text,
+                            "unknown_identifiers": unknown_identifiers,
+                            "llm_attempts": retry_attempts,
+                        }
+                except Exception:
+                    # If something unexpected happened while retrying, return original message
+                    logger.exception("LLM-driven retry for unknown identifiers failed")
+                    return {
+                        "success": False,
+                        "validation_stage": "output_validation",
+                        "error": msg + " (retry mechanism failed)",
+                        "generated_sql": sql_text,
+                        "unknown_identifiers": unknown_identifiers,
+                    }
         except Exception:
             # If snapshot check fails for some reason, don't block execution - rely on DB errors.
             logger.exception("Identifier existence check failed; proceeding to execution and relying on DB errors")
@@ -389,104 +490,16 @@ class QueryAgent:
             try:
                 exec_res = execute_select(mapped_sql, params=normalized_params, max_rows=10)
             except sqlite3.OperationalError as sqe:
-                # Provide the mapped SQL and params in the structured error so callers
-                # (and the API router) can return a meaningful message instead of 500.
-                logger.exception("SQLite OperationalError while executing SQL")
-
-                # Attempt an automatic fallback for missing tables: if the error
-                # indicates a missing table (e.g., 'no such table: t_clients'),
-                # try to find a candidate table in the schema snapshot that contains
-                # client-like columns (Code_Client, Intitulé/Intitule_Client, Representant)
-                msg = str(sqe)
-                m = re.search(r"no such table:\s*([A-Za-z0-9_]+)", msg, flags=re.IGNORECASE)
-                if m:
-                    missing = m.group(1)
-                    logger.info("Detected missing table '%s' - attempting fallback lookup in schema snapshot", missing)
-                    try:
-                        snap = get_schema_snapshot(limit_sample=0)
-                        candidate = None
-                        # prefer ventes table variant if available
-                        for tname, info in snap.get('tables', {}).items():
-                            cols = [c.lower() for c in info.get('columns', [])]
-                            if 'code_client' in cols or 'code_client' in tname.lower():
-                                candidate = tname
-                                break
-
-                        if not candidate:
-                            # fallback: pick any table that has 'code_client' like column
-                            for tname, info in snap.get('tables', {}).items():
-                                cols = [c.lower() for c in info.get('columns', [])]
-                                if any(k in cols for k in ('code_client', 'intitule_client', 'representant')):
-                                    candidate = tname
-                                    break
-
-                        if candidate:
-                            logger.info("Retrying query replacing missing table '%s' with candidate '%s'", missing, candidate)
-                            replaced_sql = re.sub(r"\b" + re.escape(missing) + r"\b", candidate, mapped_sql, flags=re.IGNORECASE)
-                            logger.debug("Rewritten SQL for retry: %s", replaced_sql)
-                            try:
-                                exec_res = execute_select(replaced_sql, params=normalized_params, max_rows=10)
-                                # If successful, return the results (note we expose the rewritten SQL)
-                                return {
-                                    "success": True,
-                                    "validation_stage": "completed",
-                                    "sql": replaced_sql,
-                                    "original_sql": sql_text,
-                                    "message": f"SQL generated, validated and executed (rewritten replacing {missing} with {candidate})",
-                                    "params": normalized_params,
-                                    "explanation": f"Generated SQL query for: {question}",
-                                    "columns": exec_res.get('columns', []),
-                                    "rows_preview": exec_res.get('rows', [])[:10],
-                                    "rowcount": exec_res.get('rowcount', 0),
-                                }
-                            except sqlite3.OperationalError as retry_sqe:
-                                # If retry failed due to missing column, attempt to auto-derive common
-                                # computed columns (e.g., Mois_Depuis_Derniere_Vente) from available
-                                # sales Date column in the candidate table and retry.
-                                rmsg = str(retry_sqe)
-                                cm = re.search(r"no such column:\s*([A-Za-z0-9_]+)", rmsg, flags=re.IGNORECASE)
-                                if cm:
-                                    missing_col = cm.group(1)
-                                    logger.info("Retry failed due to missing column '%s' - attempting to derive it", missing_col)
-                                    # Known derived column: Mois_Depuis_Derniere_Vente -> compute months since Date
-                                    if missing_col.lower() == 'mois_depuis_derniere_vente':
-                                        # SQLite months-difference expression (integer months)
-                                        months_expr = (
-                                            "( (strftime('%Y','now') - strftime('%Y', Date)) * 12 + "
-                                            "(strftime('%m','now') - strftime('%m', Date)) )"
-                                        )
-                                        derived_sql = re.sub(r"\b" + re.escape(missing_col) + r"\b", months_expr, replaced_sql, flags=re.IGNORECASE)
-                                        logger.debug("Retrying with derived column expression: %s", derived_sql)
-                                        try:
-                                            exec_res = execute_select(derived_sql, params=normalized_params, max_rows=10)
-                                            return {
-                                                "success": True,
-                                                "validation_stage": "completed",
-                                                "sql": derived_sql,
-                                                "original_sql": sql_text,
-                                                "message": f"SQL generated, validated and executed (rewritten replacing {missing} with {candidate} and deriving {missing_col})",
-                                                "params": normalized_params,
-                                                "explanation": f"Generated SQL query for: {question}",
-                                                "columns": exec_res.get('columns', []),
-                                                "rows_preview": exec_res.get('rows', [])[:10],
-                                                "rowcount": exec_res.get('rowcount', 0),
-                                            }
-                                        except Exception:
-                                            logger.exception("Retry with derived column failed")
-                                # if we can't handle it, log and continue to outer error return
-                                logger.exception("Retry with candidate table failed (operational error)")
-                            except Exception:
-                                logger.exception("Retry with candidate table failed")
-
-                    except Exception:
-                        logger.exception("Fallback lookup failed")
-
+                err_text = str(sqe)
+                logger.error("SQLite OperationalError while executing SQL: %s", err_text)
+                msg = f"SQLite execution error: {err_text}. Generated SQL: {mapped_sql}"
                 return {
                     "success": False,
                     "validation_stage": "execution",
-                    "error": f"SQLite execution error: {sqe}",
+                    "error": msg,
                     "generated_sql": mapped_sql,
                     "params": normalized_params,
+                    "sqlite_error": err_text,
                 }
 
             # Normal successful execution
@@ -504,58 +517,6 @@ class QueryAgent:
             }
         except Exception as e:
             logger.exception("Execution failed for generated SQL")
-            err_msg = str(e)
-
-            # If the error looks like a misuse of window functions (SQLite limitation),
-            # attempt a safe retry by asking the LLM to rewrite the query without
-            # window functions. This uses our llm/sql_agent adapter which already
-            # formats prompts according to the project's rules.
-            if 'window function' in err_msg.lower() or 'lag(' in err_msg.lower() or 'lead(' in err_msg.lower():
-                try:
-                    logger.info("Detected window function error; requesting LLM to rewrite without window functions")
-                    from llm import sql_agent
-
-                    rewrite_question = (
-                        f"The previous SQL failed to execute in SQLite with error: {err_msg}. "
-                        "Please rewrite the SQL to avoid using window functions (LAG/LEAD/ROW_NUMBER/etc.) "
-                        "and instead use joins or subqueries. Keep to the allowed columns and return only a SELECT statement. "
-                        f"Original user question: {question}"
-                    )
-
-                    # Use a minimal sample_rows (empty) — the prompt builder will include schema
-                    rewrite_resp = sql_agent.generate_sql_from_question(rewrite_question, [])
-                    if rewrite_resp.get('sql'):
-                        # Return the rewritten SQL to the router for execution instead
-                        # of executing it here. This keeps execution centralized in
-                        # the API router/ExecutorAgent and avoids double execution
-                        # paths that can lead to unexpected HTTP 500 responses.
-                        rewritten = rewrite_resp['sql']
-                        rewritten_mapped = self._map_logical_table_names(rewritten)
-                        # Validate rewritten SQL before returning
-                        val = self.sql_validator.validate(rewritten)
-                        if not val.is_valid:
-                            return {
-                                "success": False,
-                                "validation_stage": "execution",
-                                "error": f"Rewritten SQL failed validation: {val.message}",
-                                "generated_sql": rewritten,
-                                "sql_errors": val.errors,
-                            }
-
-                        return {
-                            "success": True,
-                            # Mark as completed so the router will proceed to execution
-                            # with the rewritten, validated SQL.
-                            "validation_stage": "completed",
-                            "sql": rewritten_mapped,
-                            "params": rewrite_resp.get('params', {}),
-                            "explanation": rewrite_resp.get('explanation', ''),
-                            "original_sql": sql_text,
-                            "rewritten_from_window_function": True,
-                        }
-                except Exception:
-                    logger.exception("Failed to request LLM rewrite for window function error")
-
             return {
                 "success": False,
                 "validation_stage": "execution",
@@ -635,6 +596,44 @@ class QueryAgent:
             return f"SELECT * FROM {candidate} LIMIT 5"
 
         # no heuristic match
+        return ""
+
+    def _intent_sql_fallback(self, question: str) -> str:
+        """Intent-aware local SQL fallback for a small set of common queries.
+
+        Returns a SQL string (using physical table names like t_ventes_cleann)
+        or empty string if no intent matched.
+        """
+        if not question:
+            return ""
+        q = question.lower()
+
+        # Most loyal client: interpret as client with most months with purchases
+        if 'most loyal' in q or 'most loyal client' in q or 'most loyal customers' in q:
+            # months active (YYYY-MM) and total quantity as tiebreaker
+            sql = (
+                "SELECT Code_Client, Intitule_client, "
+                "COUNT(DISTINCT substr(Date,1,7)) AS months_active, "
+                "SUM(CAST(REPLACE(COALESCE(NULLIF(Qte_Vendu, ''), '0'), ',', '.') AS NUMERIC)) AS total_qty "
+                "FROM t_ventes_cleann "
+                "GROUP BY Code_Client, Intitule_client "
+                "ORDER BY months_active DESC, total_qty DESC LIMIT 1"
+            )
+            return sql
+
+        # Top N by sales
+        m = re.search(r"top\s+(\d+)\s+by\s+sales", q)
+        if m:
+            n = int(m.group(1))
+            sql = (
+                "SELECT Ref_Article, Designation, "
+                "SUM(CAST(REPLACE(COALESCE(NULLIF(Qte_Vendu, ''), '0'), ',', '.') AS NUMERIC)) AS qty_sold, "
+                "SUM(CAST(REPLACE(COALESCE(NULLIF(CA_HT_NET, ''), '0'), ',', '.') AS NUMERIC)) AS net_sales "
+                "FROM t_ventes_cleann "
+                "GROUP BY Ref_Article, Designation ORDER BY net_sales DESC LIMIT %d"
+            ) % n
+            return sql
+
         return ""
 
     def _local_fix_for_unknown_identifiers(self, sql_text: str, question: str) -> str:
@@ -732,6 +731,23 @@ class QueryAgent:
             return f":{param_name}"
 
         new_sql = pattern.sub(repl, sql)
+        # Additionally, detect ISO date string literals like '2025-09-16' and
+        # replace them with named parameters to avoid inline literals in SQL.
+        # This handles common patterns like "date >= '2025-09-16'" or BETWEEN clauses.
+        date_pattern = re.compile(r"'(\d{4}-\d{2}-\d{2})'")
+
+        def date_repl(m):
+            date_val = m.group(1)
+            pname = 'param_date'
+            i = 1
+            base = pname
+            while pname in params:
+                i += 1
+                pname = f"{base}_{i}"
+            params[pname] = date_val
+            return f":{pname}"
+
+        new_sql = date_pattern.sub(date_repl, new_sql)
         return new_sql, params
 
     def _map_logical_table_names(self, sql: str) -> str:
@@ -800,8 +816,31 @@ class QueryAgent:
 
 def generate_sql_from_question(question: str) -> Dict[str, Any]:
     """Convenience function to generate SQL from a natural language question."""
-    agent = QueryAgent()
-    return agent.generate_sql(question)
+    # Prefer the new text2sql QueryAgent if available for a unified backend.
+    try:
+        from text2sql.agent import QueryAgent as NewQueryAgent
+
+        agent = NewQueryAgent()
+        res = agent.generate_and_run(question)
+        # Map to legacy response shape expected by older callers/tests
+        rows = res.get("rows", [])
+        sql = res.get("sql")
+        return {
+            "success": True,
+            "validation_stage": "completed",
+            "sql": sql,
+            "original_sql": sql,
+            "message": "SQL generated, validated and executed (via text2sql)",
+            "params": {},
+            "explanation": "",
+            "columns": list(rows[0].keys()) if rows else [],
+            "rows_preview": rows[:10],
+            "rowcount": len(rows),
+        }
+    except Exception:
+        # Fallback to legacy QueryAgent implementation in this module
+        agent = QueryAgent()
+        return agent.generate_sql(question)
 
 
 # Alias for backward compatibility

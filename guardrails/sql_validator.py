@@ -195,13 +195,27 @@ class SQLOutputValidator:
             )
         # 4. Detect inline string literals (unparameterized values) - discourage PII exposure
         #    Require models to use named parameters like :param_name for user-provided values
+        #    However, allow small, harmless literals that are commonly used in SQL functions
+        #    (e.g., ',', '.', numeric strings like '0', short format tokens). This avoids
+        #    false positives for safe formatting operations such as REPLACE(..., ',', '.')
         inline_literals = re.findall(r"'([^']*)'", normalized)
         if inline_literals:
-            # Allow format strings (strftime patterns) and empty strings; flag likely user-provided values
-            non_empty = [lit for lit in inline_literals if lit.strip() and '%' not in lit]
-            if non_empty:
-                errors.append(f"Inline string literal(s) detected: {non_empty[:5]}")
-                logger.error(f"INLINE LITERAL(S) DETECTED: {non_empty[:5]}")
+            def _is_allowed_literal(lit: str) -> bool:
+                # empty string and strftime patterns are allowed
+                if not lit or '%' in lit:
+                    return True
+                # numeric-like literals: 0, 1, 3.14, -1
+                if re.match(r'^-?\d+(?:\.\d+)?$', lit):
+                    return True
+                # very short punctuation tokens used in REPLACE/formatting (e.g. ',', '.')
+                if len(lit) <= 2 and re.match(r'^[\.,;:\-]$', lit):
+                    return True
+                return False
+
+            non_allowed = [lit for lit in inline_literals if not _is_allowed_literal(lit)]
+            if non_allowed:
+                errors.append(f"Inline string literal(s) detected: {non_allowed[:5]}")
+                logger.error(f"INLINE LITERAL(S) DETECTED: {non_allowed[:5]}")
                 return SQLValidationResult(
                     is_valid=False,
                     sql_query=sql_query,

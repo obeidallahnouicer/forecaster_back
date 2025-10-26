@@ -65,15 +65,49 @@ def _load_workbook_files(conn: sqlite3.Connection) -> None:
         try:
             if p.suffix.lower() == ".csv":
                 # Try to auto-detect delimiter for CSVs (comma, semicolon, tab)
-                try:
+                # and try several encodings if the default fails (common on Windows/Excel exports).
+                def _try_read_csv_with_encodings(path: Path):
+                    encodings = ["utf-8-sig", "utf-8", "latin1", "cp1252"]
+                    # first attempt: sniff delimiter using a small sample with utf-8-sig
                     import csv as _csv
-                    sample = p.open('r', encoding='utf-8', errors='ignore').read(4096)
-                    dialect = _csv.Sniffer().sniff(sample)
-                    sep = dialect.delimiter
-                    df = pd.read_csv(p, sep=sep, engine='python', on_bad_lines='skip')
-                except Exception:
-                    # Fallback to pandas auto-detection
-                    df = pd.read_csv(p, on_bad_lines='skip')
+                    sample = None
+                    for enc in encodings:
+                        try:
+                            with path.open('r', encoding=enc, errors='replace') as fh:
+                                sample = fh.read(8192)
+                            if sample:
+                                break
+                        except Exception:
+                            sample = None
+                    sep = ','
+                    try:
+                        if sample:
+                            dialect = _csv.Sniffer().sniff(sample)
+                            sep = dialect.delimiter
+                    except Exception:
+                        # keep default comma
+                        sep = ','
+
+                    last_exc = None
+                    for enc in encodings:
+                        try:
+                            df = pd.read_csv(path, sep=sep, engine='python', encoding=enc, on_bad_lines='skip')
+                            logger.info(f"Read CSV {path.name} using encoding {enc} and separator '{sep}'")
+                            return df
+                        except Exception as e:
+                            last_exc = e
+                            logger.debug(f"Failed to read {path.name} with encoding {enc}: {e}")
+                            continue
+                    # final fallback: try pandas without specifying sep/encoding
+                    try:
+                        df = pd.read_csv(path, on_bad_lines='skip')
+                        logger.info(f"Read CSV {path.name} with pandas default encoding")
+                        return df
+                    except Exception:
+                        # raise the last encoding error to be caught by outer exception
+                        raise last_exc or Exception("Failed to read CSV file")
+
+                df = _try_read_csv_with_encodings(p)
             else:
                 # read first sheet
                 df = pd.read_excel(p, engine="openpyxl")

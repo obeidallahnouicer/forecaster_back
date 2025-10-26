@@ -37,3 +37,19 @@ tqdm
 # Testing
 pytest
 pytest-asyncio
+
+# Additional packages required for the Text2SQL integration
+# (transformers model loading, DB access, fuzzy matching, and API)
+transformers
+torch
+accelerate
+bitsandbytes
+sqlalchemy
+psycopg2-binary  # postgres driver
+pymysql          # mysql driver
+pydantic
+python-dotenv
+fastapi
+uvicorn[standard]
+sqlparse
+rapidfuzz
