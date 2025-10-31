@@ -1,5 +1,4 @@
 import sys
-sys.path.append(r'c:\Users\onouicer\Desktop\slimback\forecaster_back')
 from core.registry import REGISTRY
 from core.context_manager import get_context_manager
 
