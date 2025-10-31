@@ -165,9 +165,17 @@ def create_app() -> FastAPI:
             raise
     
     # Include API routers
-    app.include_router(sql_chat.router, prefix="/api", tags=["SQL Chat"])
-    app.include_router(forecasts.router, prefix="/api", tags=["Forecasts"])
-    app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
+    # `sql_chat.router` already defines its own prefix (`/api/sql-chat`).
+    # Include it normally and also include an alias with prefix `/api`
+    # to support clients that (incorrectly) call `/api/api/sql-chat`.
+    app.include_router(sql_chat.router, tags=["SQL Chat"])
+    # Backwards-compatible alias (keeps old clients working)
+    app.include_router(sql_chat.router, prefix="/api", tags=["SQL Chat Alias"])
+    # Mount forecasts and dashboard under explicit subpaths so the
+    # API root and documentation match the actual routes the clients
+    # expect (e.g. /api/forecasts/upload, /api/dashboard/status).
+    app.include_router(forecasts.router, prefix="/api/forecasts", tags=["Forecasts"])
+    app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
     
     # Health check endpoint
     @app.get("/health", tags=["System"])
