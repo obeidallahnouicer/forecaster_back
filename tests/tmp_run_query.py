@@ -1,5 +1,4 @@
 import sys, time, json
-sys.path.append(r'c:\Users\onouicer\Desktop\slimback\forecaster_back')
 from agents.query_agent import generate_sql
 from core.db_connection import execute_select
 
