@@ -1,0 +1,18 @@
+{
+  "key": "forecast:summary:c6f990ea",
+  "created_at": 1761954103.064262,
+  "updated_at": 1761954103.064262,
+  "expires_at": 1762040503.064262,
+  "version": "v1",
+  "status": "completed",
+  "size_bytes": 178479,
+  "hit_count": 0,
+  "last_accessed": null,
+  "tags": {
+    "frequency": "yearly",
+    "type": "summary",
+    "count": 632,
+    "fingerprint": "8b4254c33f1351bf"
+  },
+  "checksum": "d3084db0b6e97ce609d2eb31dd901163"
+}
