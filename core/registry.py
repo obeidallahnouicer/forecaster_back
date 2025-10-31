@@ -44,6 +44,14 @@ class ForecastRegistry:
         (self.cache_dir / "summary").mkdir(parents=True, exist_ok=True)
         # In-memory session metadata (map to SessionInfo)
         self.sessions: Dict[str, SessionInfo] = {}
+        # on-disk sessions file for simple persistence across restarts
+        self._sessions_file = self.cache_dir / "sessions.json"
+        # attempt to load persisted sessions
+        try:
+            self._load_sessions()
+        except Exception:
+            # if loading fails, start with empty sessions but continue
+            logger.exception("Failed to load persisted sessions - starting fresh")
     
     def create_session_from_file(
         self,
@@ -95,6 +103,12 @@ class ForecastRegistry:
             self.sessions[session_id] = session_info
             logger.info(f"Created forecast session {session_id}")
 
+            # Persist session metadata (exclude non-serializable objects)
+            try:
+                self._save_sessions()
+            except Exception:
+                logger.exception("Failed to persist session metadata for %s", session_id)
+
             return session_info
 
         except Exception as e:
@@ -134,8 +148,64 @@ class ForecastRegistry:
         if session_id in self.sessions:
             del self.sessions[session_id]
             logger.info(f"Deleted session {session_id}")
+            try:
+                self._save_sessions()
+            except Exception:
+                logger.exception("Failed to persist sessions after deleting %s", session_id)
             return True
         return False
+
+
+    def _save_sessions(self) -> None:
+        """Save session metadata to disk (simple JSON). Forecaster object is omitted."""
+        out = {}
+        for sid, si in self.sessions.items():
+            try:
+                out[sid] = {
+                    "session_id": si.session_id,
+                    "file_path": si.file_path,
+                    "frequency": si.frequency,
+                    "created_at": si.created_at,
+                    "rows": si.rows,
+                    "columns": si.columns,
+                    "status": si.status,
+                }
+            except Exception:
+                # skip non-serializable entries
+                logger.exception("Failed to serialize session %s", sid)
+
+        try:
+            with open(self._sessions_file, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2)
+            logger.info("Persisted %d sessions to %s", len(out), self._sessions_file)
+        except Exception:
+            logger.exception("Failed to write sessions file %s", self._sessions_file)
+
+    def _load_sessions(self) -> None:
+        """Load persisted session metadata from disk."""
+        if not self._sessions_file.exists():
+            return
+        try:
+            with open(self._sessions_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for sid, entry in data.items():
+                try:
+                    si = SessionInfo(
+                        session_id=entry.get("session_id", sid),
+                        file_path=entry.get("file_path", ""),
+                        frequency=entry.get("frequency", "monthly"),
+                        created_at=entry.get("created_at", ""),
+                        rows=int(entry.get("rows", 0)),
+                        columns=entry.get("columns", []),
+                        status=entry.get("status", "ready"),
+                        forecaster=None,
+                    )
+                    self.sessions[sid] = si
+                except Exception:
+                    logger.exception("Failed to reconstruct session %s from persisted data", sid)
+            logger.info("Loaded %d persisted sessions from %s", len(self.sessions), self._sessions_file)
+        except Exception:
+            logger.exception("Failed to read sessions file %s", self._sessions_file)
 
 
 # Global registry instance
