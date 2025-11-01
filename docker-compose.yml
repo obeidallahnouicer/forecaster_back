@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: forecaster_api
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GROQ_API_KEY= ""
+    volumes:
+      - ./:/app
+      - ./tmp_uploads:/app/tmp_uploads
+    ports:
+      - "8000:8000"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  streamlit:
+    build: .
+    container_name: forecaster_streamlit
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./:/app
+      - ./tmp_uploads:/app/tmp_uploads
+    ports:
+      - "8501:8501"
+    command: streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+
+# Optional: add networks or other services here
