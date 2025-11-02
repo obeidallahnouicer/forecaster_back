@@ -1,7 +1,7 @@
 """
 agents/query_agent.py
 
-Minimal QueryAgent implementing strict validation pipeline.
+QueryAgent implementing strict validation pipeline for natural language to SQL conversion.
 
 This file intentionally keeps the LLM usage minimal and uses lazy imports
 so running unit tests or importing the module doesn't require LangChain/Groq
@@ -9,23 +9,19 @@ to be installed. The agent returns structured dicts indicating where
 validation failed or succeeded.
 """
 
-from typing import Dict, Any, Set
+from typing import Dict, Any
 import logging
+import re
+import datetime
+import difflib
+import unicodedata
 
 from core import config
 from core.schema_loader import get_schema_snapshot
+from core.db_connection import execute_select
 from guardrails.pii_detector import PIIInputValidator
 from guardrails.sql_validator import SQLOutputValidator
-from prompts.insight_generation import generate_file_schema
 from prompts.sql_generation import SQL_SYSTEM_PROMPT, SQL_GENERATION_TEMPLATE
-import re
-from core.db_connection import execute_select
-from typing import Any
-import datetime
-import sqlite3
-from pathlib import Path
-import difflib
-import unicodedata
 
 
 def _extract_identifiers_from_sql(sql: str) -> set:
