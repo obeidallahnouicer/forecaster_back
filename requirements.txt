@@ -11,6 +11,7 @@ streamlit
 
 # Forecasting
 prophet
+xgboost
 
 # Web framework
 fastapi

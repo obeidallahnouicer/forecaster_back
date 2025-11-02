@@ -298,8 +298,9 @@ async def upload_dataset(file: UploadFile = File(...), frequency: str = Form("ye
     # Generate upload ID
     upload_id = f"upload_{int(time.time())}_{hashlib.md5(file.filename.encode()).hexdigest()[:8]}"
     
-    # Save file
-    tmp = Path("./tmp_uploads")
+    # Save file - use absolute path from project root
+    project_root = Path(__file__).resolve().parents[2]
+    tmp = project_root / "tmp_uploads"
     tmp.mkdir(parents=True, exist_ok=True)
     out = tmp / file.filename
     

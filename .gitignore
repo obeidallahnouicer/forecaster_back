@@ -1,6 +1,69 @@
+# Environment variables
 .env
+
+# Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+
+# Data files (keep structure, exclude data)
 ventes_cleann.csv
 TABLE Chatbot.docx
+*.xlsx
+*.xls
+!.gitkeep
 
+# Cache directories (keep structure)
+cache/uploads/*
+!cache/uploads/.gitkeep
+cache/forecasts/*
+!cache/forecasts/.gitkeep
+cache/monthly/*
+!cache/monthly/.gitkeep
+cache/yearly/*
+!cache/yearly/.gitkeep
+cache/summary/*
+!cache/summary/.gitkeep
+cache/memories/*
+!cache/memories/.gitkeep
+cache/test/*
+!cache/test/.gitkeep
+cache/*.json
+cache/*.npz
+cache/*.parquet
+
+# Temporary uploads
+tmp_uploads/*
+!tmp_uploads/.gitkeep
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
