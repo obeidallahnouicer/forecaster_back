@@ -71,6 +71,26 @@ def _parse_metrics_field(val):
         return None
 
 
+def _parse_json_list_field(val):
+    """Parse a JSON string field (e.g., historical_periods, historical_sales).
+    
+    Returns a list or None.
+    """
+    if val is None:
+        return None
+    try:
+        if isinstance(val, (list, tuple)):
+            return list(val)
+        if isinstance(val, str):
+            s = val.strip()
+            if s == "":
+                return None
+            import json
+            return json.loads(s)
+    except Exception:
+        return None
+
+
 def _ensure_metric_keys(d):
     """Ensure the metric dict contains MAE, MSE, RMSE, MAPE, R2 keys.
 
@@ -109,15 +129,19 @@ def _ensure_metric_keys(d):
 def normalize_metrics_in_df(df):
     """Normalize metrics columns in the summary dataframe in-place.
 
-    For each metrics column (sma_metrics, es_metrics, lr_metrics, arima_metrics,
-    prophet_metrics, xgb_metrics), parse strings/dicts and expand to JSON/dict
-    with guaranteed keys: MAE,MSE,RMSE,MAPE,R2.
+    For each metrics column (sales_sma_metrics, sales_es_metrics, etc., and qty_sma_metrics, qty_es_metrics, etc.),
+    parse strings/dicts and expand to JSON/dict with guaranteed keys: MAE,MSE,RMSE,MAPE,R2.
+    Also parse JSON list fields for historical data.
     """
     if df is None or df.empty:
         return df
 
+    # Metrics columns for both sales and quantities
     metrics_cols = [
-        'sma_metrics', 'es_metrics', 'lr_metrics', 'arima_metrics', 'prophet_metrics', 'xgb_metrics'
+        'sales_sma_metrics', 'sales_es_metrics', 'sales_lr_metrics', 
+        'sales_arima_metrics', 'sales_prophet_metrics', 'sales_xgb_metrics',
+        'qty_sma_metrics', 'qty_es_metrics', 'qty_lr_metrics',
+        'qty_arima_metrics', 'qty_prophet_metrics', 'qty_xgb_metrics'
     ]
 
     for col in metrics_cols:
@@ -133,6 +157,16 @@ def normalize_metrics_in_df(df):
         except Exception:
             # As a last resort, set all rows to None-keys dict
             df[col] = [{"MAE": None, "MSE": None, "RMSE": None, "MAPE": None, "R2": None} for _ in range(len(df))]
+
+    # Parse JSON list fields
+    json_list_cols = ['historical_periods', 'historical_sales', 'historical_quantities']
+    for col in json_list_cols:
+        if col not in df.columns:
+            continue
+        try:
+            df[col] = df[col].apply(_parse_json_list_field)
+        except Exception:
+            df[col] = [None for _ in range(len(df))]
 
     return df
 
@@ -203,12 +237,19 @@ def normalize_metrics_in_result(res):
     """Normalize per-article forecast result dict in-place.
 
     Ensures each method metrics field is a dict with keys MAE,MSE,RMSE,MAPE,R2.
+    Handles both sales and quantity metrics.
     """
     if not isinstance(res, dict):
         return res
+    
+    # Metrics columns for both sales and quantities
     metrics_cols = [
-        'sma_metrics', 'es_metrics', 'lr_metrics', 'arima_metrics', 'prophet_metrics', 'xgb_metrics'
+        'sales_sma_metrics', 'sales_es_metrics', 'sales_lr_metrics',
+        'sales_arima_metrics', 'sales_prophet_metrics', 'sales_xgb_metrics',
+        'qty_sma_metrics', 'qty_es_metrics', 'qty_lr_metrics',
+        'qty_arima_metrics', 'qty_prophet_metrics', 'qty_xgb_metrics'
     ]
+    
     for col in metrics_cols:
         if col in res:
             try:
@@ -216,6 +257,16 @@ def normalize_metrics_in_result(res):
                 res[col] = _ensure_metric_keys(parsed)
             except Exception:
                 res[col] = {"MAE": None, "MSE": None, "RMSE": None, "MAPE": None, "R2": None}
+    
+    # Parse JSON list fields if present
+    json_list_cols = ['historical_periods', 'historical_sales', 'historical_quantities']
+    for col in json_list_cols:
+        if col in res:
+            try:
+                res[col] = _parse_json_list_field(res.get(col))
+            except Exception:
+                res[col] = None
+    
     return res
 
 
@@ -368,6 +419,32 @@ async def create_session(req: SessionCreateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/sessions")
+async def list_sessions():
+    """List all active forecast sessions."""
+    sessions = REGISTRY.list_sessions()
+    
+    # Get details for each session
+    session_details = []
+    for session_id in sessions:
+        info = REGISTRY.get(session_id)
+        if info:
+            session_details.append({
+                "session_id": info.session_id,
+                "frequency": info.frequency,
+                "created_at": info.created_at,
+                "rows": info.rows,
+                "status": info.status,
+                "file_path": Path(info.file_path).name if info.file_path else None
+            })
+    
+    logger.info(f"Listed {len(session_details)} sessions")
+    return {
+        "count": len(session_details),
+        "sessions": session_details
+    }
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     ok = REGISTRY.delete_session(session_id)
@@ -465,8 +542,8 @@ async def forecast_article(session_id: str, ref: str, period: int = 3, alpha: fl
         computation_time_ms=computation_time_ms
     )
     
-    logger.info(f"[CACHE MISS] Forecast article {ref}: avg={res.get('avg_forecast')}, "
-               f"trend={res.get('trend_label')}, computed in {computation_time_ms:.0f}ms")
+    logger.info(f"[CACHE MISS] Forecast article {ref}: sales_avg={res.get('sales_avg_forecast')}, "
+               f"qty_avg={res.get('qty_avg_forecast')}, computed in {computation_time_ms:.0f}ms")
     
     return JSONResponse(content=sanitize(res))
 
@@ -555,9 +632,9 @@ async def forecast_all(session_id: str, period: int = Form(3), alpha: float = Fo
             
             top_products = []
             try:
-                if not df.empty and 'avg_forecast' in df.columns:
-                    top_df = df.sort_values('avg_forecast', ascending=False).head(5)
-                    top_products = top_df[['ref_article', 'designation', 'avg_forecast']].to_dict(orient='records')
+                if not df.empty and 'sales_avg_forecast' in df.columns:
+                    top_df = df.sort_values('sales_avg_forecast', ascending=False).head(5)
+                    top_products = top_df[['ref_article', 'designation', 'sales_avg_forecast']].to_dict(orient='records')
                     top_products = sanitize(top_products)
             except Exception:
                 logger.exception("Failed to compute top_products from cached summary")
@@ -631,9 +708,9 @@ async def forecast_all(session_id: str, period: int = Form(3), alpha: float = Fo
     # Compute top products by ensemble average forecast so callers can immediately answer questions
     top_products = []
     try:
-        if not df.empty and 'avg_forecast' in df.columns:
-            top_df = df.sort_values('avg_forecast', ascending=False).head(5)
-            top_products = top_df[['ref_article', 'designation', 'avg_forecast']].to_dict(orient='records')
+        if not df.empty and 'sales_avg_forecast' in df.columns:
+            top_df = df.sort_values('sales_avg_forecast', ascending=False).head(5)
+            top_products = top_df[['ref_article', 'designation', 'sales_avg_forecast']].to_dict(orient='records')
             top_products = sanitize(top_products)
     except Exception:
         logger.exception("Failed to compute top_products from summary dataframe")
