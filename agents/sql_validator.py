@@ -1,18 +1,31 @@
 """
 SQL Validator using Guardrails AI
 
-Enhanced SQL validation with comprehensive safety checks:
-- Syntax validation
-- SQL injection prevention
-- SELECT-only enforcement
-- LIMIT enforcement
+⚠️ DEPRECATED: This module is deprecated and will be removed in a future version.
+Please use `guardrails.sql_validator` directly instead.
+
+Migration guide:
+    Old: from agents.sql_validator import validate_sql
+    New: from guardrails.sql_validator import SQLOutputValidator
+         validator = SQLOutputValidator()
+         result = validator.validate(sql)
+
+This wrapper is maintained for backward compatibility only.
 """
+import warnings
 import logging
 from typing import Tuple
 
 from guardrails.sql_validator import validate_sql_output
 
 logger = logging.getLogger("agents.sql_validator")
+
+# Issue deprecation warning when module is imported
+warnings.warn(
+    "agents.sql_validator is deprecated. Use guardrails.sql_validator.SQLOutputValidator instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def validate_sql(sql: str, schema_tables: set = None, enforce_limit: int = 1000) -> Tuple[bool, str, str]:
