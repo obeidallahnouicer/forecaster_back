@@ -3,7 +3,7 @@ import sqlite3
 import tempfile
 from text2sql.md_rules import load_example_questions
 from text2sql.model_loader import ModelLoader
-from text2sql.agent import QueryAgent
+from text2sql.agent import Chat2DBQueryAgent
 
 
 def setup_clients_db(db_path: str):
@@ -45,7 +45,7 @@ def test_md_examples_execute(tmp_path, monkeypatch):
     md_path = os.path.abspath(md_path)
     questions = load_example_questions(md_path)
 
-    agent = QueryAgent(db_url=db_url, model_loader=ModelLoader())
+    agent = Chat2DBQueryAgent(db_url=db_url, model_loader=ModelLoader())
 
     assert len(questions) > 0, "No example questions found in TABLE Chatbot.md"
 

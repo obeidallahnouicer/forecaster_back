@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 
 from text2sql.model_loader import ModelLoader
-from text2sql.agent import QueryAgent
+from text2sql.agent import Chat2DBQueryAgent
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +24,7 @@ def test_generate_and_run_count(tmp_path):
     conn.close()
 
     db_url = f"sqlite:///{db_path}"
-    agent = QueryAgent(db_url=db_url, model_loader=ModelLoader())
+    agent = Chat2DBQueryAgent(db_url=db_url, model_loader=ModelLoader())
     res = agent.generate_and_run("How many singers do we have?")
 
     assert "rows" in res

@@ -6,15 +6,14 @@ import plotly.express as px
 from pathlib import Path
 import json
 import ast
-import sys
 from datetime import datetime
 
-# Import your forecaster
-from sales_forecaster import SalesForecaster
+# Import your forecaster - UPDATED to use IntegratedForecaster
+from SalesAndQuantityForecaster import IntegratedForecaster
 
 # Page configuration
 st.set_page_config(
-    page_title="Sales Forecasting Dashboard",
+    page_title="Sales & Quantity Forecasting Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -50,6 +49,13 @@ st.markdown("""
         border-radius: 0.3rem;
         margin: 1rem 0;
     }
+    .qty-box {
+        padding: 1rem;
+        background-color: #fff3cd;
+        border-left: 5px solid #ffc107;
+        border-radius: 0.3rem;
+        margin: 1rem 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -73,13 +79,14 @@ def load_data(uploaded_file, frequency, date_col):
             st.error("Unsupported file format. Please upload CSV or Excel file.")
             return None
         
-        # Initialize forecaster
-        forecaster = SalesForecaster(
+        # Initialize forecaster with DUAL forecasting support
+        forecaster = IntegratedForecaster(
             dataframe=df,
             cache_dir="cache",
             ref_col="Ref Article",
             date_col=date_col,
             sales_col="CA HT NET",
+            quantity_col="Qté Vendu",
             frequency=frequency
         )
         
@@ -89,23 +96,18 @@ def load_data(uploaded_file, frequency, date_col):
         return None
 
 def parse_json_field(value):
-    """Parse JSON string or Python string representation, or return the value as-is if it's already a list/dict"""
+    """Parse JSON string or Python string representation"""
     if value is None or pd.isna(value):
         return None
     
-    # If it's already a list or dict, return it
     if isinstance(value, (list, dict)):
         return value
     
-    # If it's a string, try to parse it
     if isinstance(value, str):
-        # First try JSON (with double quotes)
         try:
             return json.loads(value)
         except:
             pass
-        
-        # Then try Python literal eval (with single quotes)
         try:
             return ast.literal_eval(value)
         except:
@@ -117,32 +119,31 @@ def parse_metrics(metrics_str):
     """Parse metrics from JSON string"""
     return parse_json_field(metrics_str)
 
-def create_forecast_chart(historical_periods, historical_values, forecast_value, next_period, frequency):
-    """Create an interactive forecast visualization - fixed for monthly support"""
+def create_dual_forecast_chart(historical_periods, sales_values, qty_values, 
+                                sales_forecast, qty_forecast, next_period, frequency):
+    """Create dual-axis chart showing both sales and quantity forecasts"""
     
-    # Parse historical_values if it's a JSON string
-    if isinstance(historical_values, str):
-        historical_values = parse_json_field(historical_values)
-    
-    # Parse historical_periods if it's a JSON string
+    # Parse values if they're JSON strings
+    if isinstance(sales_values, str):
+        sales_values = parse_json_field(sales_values)
+    if isinstance(qty_values, str):
+        qty_values = parse_json_field(qty_values)
     if isinstance(historical_periods, str):
         historical_periods = parse_json_field(historical_periods)
     
-    # Ensure we have valid data
-    if historical_values is None or historical_periods is None:
-        st.error(f"Invalid historical data format. Periods: {type(historical_periods)}, Values: {type(historical_values)}")
-        st.write("**Unable to parse historical data. Please check your forecaster output format.**")
+    # Validate data
+    if sales_values is None or qty_values is None or historical_periods is None:
         return None
     
-    # Convert to lists if they're numpy arrays
-    if isinstance(historical_values, np.ndarray):
-        historical_values = historical_values.tolist()
+    # Convert to lists
+    if isinstance(sales_values, np.ndarray):
+        sales_values = sales_values.tolist()
+    if isinstance(qty_values, np.ndarray):
+        qty_values = qty_values.tolist()
     if isinstance(historical_periods, np.ndarray):
         historical_periods = historical_periods.tolist()
     
-    # Convert periods to strings for display
-    # For monthly, periods come as strings like '2024-01'
-    # For yearly, they come as integers
+    # Period labels
     if frequency == 'monthly':
         period_labels = [str(p) for p in historical_periods]
         next_period_label = str(next_period)
@@ -150,25 +151,138 @@ def create_forecast_chart(historical_periods, historical_values, forecast_value,
         period_labels = [str(int(p)) for p in historical_periods]
         next_period_label = str(int(next_period))
     
-    # Create numeric x-axis for proper ordering
+    # Numeric x-axis
     x_numeric = list(range(len(historical_periods)))
     x_numeric_next = len(historical_periods)
     
+    # Create figure with secondary y-axis
     fig = go.Figure()
     
-    # Historical data
+    # Sales traces (primary y-axis)
     fig.add_trace(go.Scatter(
         x=x_numeric,
-        y=historical_values,
+        y=sales_values,
         mode='lines+markers',
         name='Historical Sales',
         line=dict(color='#1f77b4', width=3),
         marker=dict(size=8),
         text=period_labels,
-        hovertemplate='<b>%{text}</b><br>Sales: %{y:.2f}<extra></extra>'
+        hovertemplate='<b>%{text}</b><br>Sales: %{y:.2f}<extra></extra>',
+        yaxis='y1'
     ))
     
-    # Forecast point - connect last historical point to forecast
+    fig.add_trace(go.Scatter(
+        x=[x_numeric[-1], x_numeric_next],
+        y=[sales_values[-1], sales_forecast],
+        mode='lines+markers',
+        name='Sales Forecast',
+        line=dict(color='#ff7f0e', width=3, dash='dash'),
+        marker=dict(size=10, symbol='star'),
+        text=[period_labels[-1], next_period_label],
+        hovertemplate='<b>%{text}</b><br>Sales: %{y:.2f}<extra></extra>',
+        yaxis='y1'
+    ))
+    
+    # Quantity traces (secondary y-axis)
+    fig.add_trace(go.Scatter(
+        x=x_numeric,
+        y=qty_values,
+        mode='lines+markers',
+        name='Historical Quantity',
+        line=dict(color='#2ca02c', width=3),
+        marker=dict(size=8, symbol='diamond'),
+        text=period_labels,
+        hovertemplate='<b>%{text}</b><br>Quantity: %{y:.0f}<extra></extra>',
+        yaxis='y2'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=[x_numeric[-1], x_numeric_next],
+        y=[qty_values[-1], qty_forecast],
+        mode='lines+markers',
+        name='Quantity Forecast',
+        line=dict(color='#d62728', width=3, dash='dash'),
+        marker=dict(size=10, symbol='star'),
+        text=[period_labels[-1], next_period_label],
+        hovertemplate='<b>%{text}</b><br>Quantity: %{y:.0f}<extra></extra>',
+        yaxis='y2'
+    ))
+    
+    # Update layout with dual y-axes
+    fig.update_layout(
+        title=f"Sales & Quantity Forecast ({frequency.capitalize()})",
+        xaxis=dict(
+            title="Period",
+            tickmode='linear',
+            tick0=0,
+            dtick=1,
+            ticktext=period_labels + [next_period_label],
+            tickvals=x_numeric + [x_numeric_next]
+        ),
+        yaxis=dict(
+            title=dict(text="Sales (CA HT NET)", font=dict(color="#1f77b4")),
+            tickfont=dict(color="#1f77b4")
+        ),
+        yaxis2=dict(
+            title=dict(text="Quantity (Qté Vendu)", font=dict(color="#2ca02c")),
+            tickfont=dict(color="#2ca02c"),
+            overlaying='y',
+            side='right'
+        ),
+        hovermode='x unified',
+        template='plotly_white',
+        height=500,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    return fig
+
+def create_forecast_chart(historical_periods, historical_values, forecast_value, 
+                         next_period, frequency, value_type="Sales"):
+    """Create single forecast visualization"""
+    
+    if isinstance(historical_values, str):
+        historical_values = parse_json_field(historical_values)
+    if isinstance(historical_periods, str):
+        historical_periods = parse_json_field(historical_periods)
+    
+    if historical_values is None or historical_periods is None:
+        return None
+    
+    if isinstance(historical_values, np.ndarray):
+        historical_values = historical_values.tolist()
+    if isinstance(historical_periods, np.ndarray):
+        historical_periods = historical_periods.tolist()
+    
+    if frequency == 'monthly':
+        period_labels = [str(p) for p in historical_periods]
+        next_period_label = str(next_period)
+    else:
+        period_labels = [str(int(p)) for p in historical_periods]
+        next_period_label = str(int(next_period))
+    
+    x_numeric = list(range(len(historical_periods)))
+    x_numeric_next = len(historical_periods)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=x_numeric,
+        y=historical_values,
+        mode='lines+markers',
+        name=f'Historical {value_type}',
+        line=dict(color='#1f77b4', width=3),
+        marker=dict(size=8),
+        text=period_labels,
+        hovertemplate=f'<b>%{{text}}</b><br>{value_type}: %{{y:.2f}}<extra></extra>'
+    ))
+    
     fig.add_trace(go.Scatter(
         x=[x_numeric[-1], x_numeric_next],
         y=[historical_values[-1], forecast_value],
@@ -177,10 +291,9 @@ def create_forecast_chart(historical_periods, historical_values, forecast_value,
         line=dict(color='#ff7f0e', width=3, dash='dash'),
         marker=dict(size=10, symbol='star'),
         text=[period_labels[-1], next_period_label],
-        hovertemplate='<b>%{text}</b><br>Sales: %{y:.2f}<extra></extra>'
+        hovertemplate=f'<b>%{{text}}</b><br>{value_type}: %{{y:.2f}}<extra></extra>'
     ))
     
-    # Update x-axis to show period labels
     fig.update_xaxes(
         tickmode='linear',
         tick0=0,
@@ -190,9 +303,9 @@ def create_forecast_chart(historical_periods, historical_values, forecast_value,
     )
     
     fig.update_layout(
-        title=f"Sales Forecast ({frequency.capitalize()})",
+        title=f"{value_type} Forecast ({frequency.capitalize()})",
         xaxis_title="Period",
-        yaxis_title="Sales (CA HT NET)",
+        yaxis_title=value_type,
         hovermode='x unified',
         template='plotly_white',
         height=400
@@ -201,7 +314,7 @@ def create_forecast_chart(historical_periods, historical_values, forecast_value,
     return fig
 
 def create_metrics_chart(metrics_dict, method_name):
-    """Create a bar chart for metrics"""
+    """Create bar chart for metrics"""
     if not metrics_dict or all(pd.isna(v) for v in metrics_dict.values()):
         return None
     
@@ -210,7 +323,6 @@ def create_metrics_chart(metrics_dict, method_name):
         'Value': list(metrics_dict.values())
     })
     
-    # Remove NaN values
     metrics_df = metrics_df.dropna()
     
     if metrics_df.empty:
@@ -233,15 +345,15 @@ def create_metrics_chart(metrics_dict, method_name):
     
     return fig
 
-def display_method_comparison(result):
-    """Display comparison of all forecasting methods"""
+def display_method_comparison(result, value_type="sales"):
+    """Display comparison of forecasting methods for sales or quantity"""
     methods = {
-        'Simple Moving Average': 'sma_forecast',
-        'Exponential Smoothing': 'es_forecast',
-        'Linear Regression': 'lr_forecast',
-        'ARIMA': 'arima_forecast',
-        'Prophet': 'prophet_forecast',
-        'XGBoost/Random Forest': 'xgb_forecast'
+        'Simple Moving Average': f'{value_type}_sma_forecast',
+        'Exponential Smoothing': f'{value_type}_es_forecast',
+        'Linear Regression': f'{value_type}_lr_forecast',
+        'ARIMA': f'{value_type}_arima_forecast',
+        'Prophet': f'{value_type}_prophet_forecast',
+        'XGBoost/Random Forest': f'{value_type}_xgb_forecast'
     }
     
     comparison_data = []
@@ -254,31 +366,33 @@ def display_method_comparison(result):
     
     if comparison_data:
         df_comp = pd.DataFrame(comparison_data)
+        title_prefix = "Sales" if value_type == "sales" else "Quantity"
         fig = px.bar(
             df_comp,
             x='Method',
             y='Forecast',
-            title='Forecast Comparison by Method',
+            title=f'{title_prefix} Forecast Comparison by Method',
             color='Forecast',
             color_continuous_scale='Viridis'
         )
         fig.update_layout(height=400, template='plotly_white')
-        fig.add_hline(
-            y=result['avg_forecast'],
-            line_dash="dash",
-            line_color="red",
-            annotation_text=f"Ensemble Average: {result['avg_forecast']:.2f}"
-        )
+        avg_key = f'{value_type}_avg_forecast'
+        if avg_key in result:
+            fig.add_hline(
+                y=result[avg_key],
+                line_dash="dash",
+                line_color="red",
+                annotation_text=f"Ensemble Average: {result[avg_key]:.2f}"
+            )
         st.plotly_chart(fig, use_container_width=True)
 
 # Main App
-st.markdown('<p class="main-header">📊 Sales Forecasting Dashboard</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">📊 Sales & Quantity Forecasting Dashboard</p>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # File upload
     uploaded_file = st.file_uploader(
         "Upload Sales Data",
         type=['csv', 'xlsx', 'xls'],
@@ -287,7 +401,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Frequency selection
     frequency = st.radio(
         "📅 Forecasting Frequency",
         options=['yearly', 'monthly'],
@@ -295,15 +408,13 @@ with st.sidebar:
         help="Choose between yearly or monthly forecasting"
     )
     
-    # Date column based on frequency
     if frequency == 'yearly':
         date_col = st.text_input("Year Column Name", value="Année", help="Column containing year data")
     else:
-        date_col = st.text_input("Date Column Name", value="Date", help="Column containing date data (must be parseable as datetime)")
+        date_col = st.text_input("Date Column Name", value="Date", help="Column containing date data")
     
     st.markdown("---")
     
-    # Advanced settings
     with st.expander("🔧 Advanced Settings"):
         period = st.slider("Moving Average Period", 1, 12, 3, help="Window size for moving average")
         alpha = st.slider("Exponential Smoothing Alpha", 0.1, 0.9, 0.3, 0.1, help="Smoothing parameter")
@@ -316,30 +427,38 @@ with st.sidebar:
         )
         
         fast_mode = st.checkbox("Fast Mode", value=True, help="Use simplified methods for articles with <6 data points")
-        force_recompute = st.checkbox("Force Recompute", value=False, help="Ignore cached results and recompute all forecasts")
+        force_recompute = st.checkbox("Force Recompute", value=False, help="Ignore cached results")
     
     st.markdown("---")
     
-    # Cache management
     with st.expander("🗑️ Cache Management"):
         st.write(f"**Current Frequency:** {frequency}")
         cache_path = Path("cache") / frequency
         if cache_path.exists():
-            cache_files = list(cache_path.glob("*.json"))
-            st.write(f"**Cache files:** {len(cache_files)}")
+            forecast_files = list((cache_path / "forecasts").glob("*.csv")) if (cache_path / "forecasts").exists() else []
+            st.write(f"**Cache files:** {len(forecast_files)}")
         else:
             st.write("**Cache directory not found**")
         
-        if st.button("Clear All Caches"):
-            if st.session_state.forecaster:
-                st.session_state.forecaster.clear_all_caches()
-                st.success("All caches cleared!")
-            else:
-                st.warning("No forecaster initialized")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("Clear Forecasts"):
+                if st.session_state.forecaster:
+                    st.session_state.forecaster.clear_forecast_cache()
+                    st.success("Forecast cache cleared!")
+        with col2:
+            if st.button("Clear Summary"):
+                if st.session_state.forecaster:
+                    st.session_state.forecaster.clear_summary_cache()
+                    st.success("Summary cache cleared!")
+        with col3:
+            if st.button("Clear All"):
+                if st.session_state.forecaster:
+                    st.session_state.forecaster.clear_all_caches()
+                    st.success("All caches cleared!")
 
 # Main content
 if uploaded_file is not None:
-    # Load data button
     if not st.session_state.data_loaded or st.button("🔄 Load/Reload Data"):
         with st.spinner("Loading data..."):
             forecaster = load_data(uploaded_file, frequency, date_col)
@@ -348,7 +467,6 @@ if uploaded_file is not None:
                 st.session_state.data_loaded = True
                 st.markdown('<div class="success-box">✅ Data loaded successfully!</div>', unsafe_allow_html=True)
                 
-                # Display data info
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Total Records", len(forecaster.df_raw))
@@ -360,15 +478,13 @@ if uploaded_file is not None:
                     if forecaster.grouped_data is not None:
                         st.metric("Clean Records", len(forecaster.grouped_data))
 
-# If data is loaded, show forecasting options
 if st.session_state.data_loaded and st.session_state.forecaster:
     st.markdown("---")
     
-    # Tabs for different views
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Forecast All", "🔍 Single Article", "📊 Summary Statistics", "📋 Data Preview"])
     
     with tab1:
-        st.header("Forecast All Articles")
+        st.header("Forecast All Articles (Sales & Quantity)")
         
         col1, col2 = st.columns([1, 4])
         with col1:
@@ -398,43 +514,53 @@ if st.session_state.data_loaded and st.session_state.forecaster:
                 status_text.empty()
                 st.success(f"✅ Forecasted {len(results)} articles successfully!")
         
-        # Display results
         if st.session_state.forecast_results is not None:
             results_df = st.session_state.forecast_results
             
             st.markdown("### 📊 Forecast Results")
             
-            # Summary metrics
-            col1, col2, col3, col4 = st.columns(4)
+            # Dual metrics display
+            col1, col2 = st.columns(2)
+            
             with col1:
-                st.metric("Total Articles", len(results_df))
+                st.markdown("#### 💰 Sales Metrics")
+                subcol1, subcol2 = st.columns(2)
+                with subcol1:
+                    st.metric("Avg Sales Forecast", f"{results_df['sales_avg_forecast'].mean():.2f}")
+                with subcol2:
+                    st.metric("Total Sales Forecast", f"{results_df['sales_avg_forecast'].sum():.2f}")
+            
             with col2:
-                st.metric("Avg Forecast", f"{results_df['avg_forecast'].mean():.2f}")
-            with col3:
-                st.metric("Total Forecast", f"{results_df['avg_forecast'].sum():.2f}")
-            with col4:
-                st.metric("Max Forecast", f"{results_df['avg_forecast'].max():.2f}")
+                st.markdown("#### 📦 Quantity Metrics")
+                subcol1, subcol2 = st.columns(2)
+                with subcol1:
+                    st.metric("Avg Qty Forecast", f"{results_df['qty_avg_forecast'].mean():.2f}")
+                with subcol2:
+                    st.metric("Total Qty Forecast", f"{results_df['qty_avg_forecast'].sum():.0f}")
             
             # Filters
             st.markdown("#### 🔍 Filter Results")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 if 'marque' in results_df.columns:
                     marques = ['All'] + sorted([str(m) for m in results_df['marque'].dropna().unique()])
-                    selected_marque = st.selectbox("Filter by Brand (Marque)", marques)
+                    selected_marque = st.selectbox("Brand (Marque)", marques)
                 else:
                     selected_marque = 'All'
             
             with col2:
                 if 'famille' in results_df.columns:
                     familles = ['All'] + sorted([str(f) for f in results_df['famille'].dropna().unique()])
-                    selected_famille = st.selectbox("Filter by Family (Famille)", familles)
+                    selected_famille = st.selectbox("Family (Famille)", familles)
                 else:
                     selected_famille = 'All'
             
             with col3:
-                min_forecast = st.number_input("Min Forecast Value", value=0.0, step=100.0)
+                min_sales = st.number_input("Min Sales Forecast", value=0.0, step=100.0)
+            
+            with col4:
+                min_qty = st.number_input("Min Qty Forecast", value=0.0, step=10.0)
             
             # Apply filters
             filtered_df = results_df.copy()
@@ -442,13 +568,16 @@ if st.session_state.data_loaded and st.session_state.forecaster:
                 filtered_df = filtered_df[filtered_df['marque'] == selected_marque]
             if selected_famille != 'All':
                 filtered_df = filtered_df[filtered_df['famille'] == selected_famille]
-            filtered_df = filtered_df[filtered_df['avg_forecast'] >= min_forecast]
+            filtered_df = filtered_df[
+                (filtered_df['sales_avg_forecast'] >= min_sales) &
+                (filtered_df['qty_avg_forecast'] >= min_qty)
+            ]
             
-            # Display table
             st.markdown(f"**Showing {len(filtered_df)} of {len(results_df)} articles**")
             
-            display_columns = ['ref_article', 'designation', 'marque', 'famille', 'next_period', 
-                             'avg_forecast', 'avg_sales', 'trend_pct', 'data_points']
+            display_columns = ['ref_article', 'designation', 'marque', 'famille', 'next_period',
+                             'sales_avg_forecast', 'qty_avg_forecast', 
+                             'sales_avg', 'qty_avg', 'sales_trend_pct', 'qty_trend_pct', 'data_points']
             available_cols = [col for col in display_columns if col in filtered_df.columns]
             
             st.dataframe(
@@ -457,19 +586,17 @@ if st.session_state.data_loaded and st.session_state.forecaster:
                 height=400
             )
             
-            # Download button
             csv = filtered_df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Download Results as CSV",
                 data=csv,
-                file_name=f"forecast_results_{frequency}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                file_name=f"dual_forecast_results_{frequency}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
     
     with tab2:
-        st.header("Single Article Forecast")
+        st.header("Single Article Forecast (Sales & Quantity)")
         
-        # Article selection
         forecaster = st.session_state.forecaster
         if forecaster.grouped_data is None:
             forecaster.prepare_data()
@@ -497,7 +624,6 @@ if st.session_state.data_loaded and st.session_state.forecaster:
                     else:
                         st.error("❌ No data available for this article")
         
-        # Display single article results
         if 'single_result' in st.session_state and st.session_state.single_result:
             result = st.session_state.single_result
             
@@ -513,47 +639,71 @@ if st.session_state.data_loaded and st.session_state.forecaster:
             with col4:
                 st.metric("Family", result.get('famille', 'N/A'))
             
-            # Forecast results
-            st.markdown("### 🎯 Forecast Results")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Next Period", result['next_period'])
-            with col2:
-                st.metric("Ensemble Forecast", f"{result['avg_forecast']:.2f}")
-            with col3:
-                st.metric("Avg Historical Sales", f"{result['avg_sales']:.2f}")
-            with col4:
-                st.metric("Trend", f"{result['trend_pct']:.2f}%")
-            
-            # Historical stats
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Max Sales", f"{result['max_sales']:.2f}")
-            with col2:
-                st.metric("Min Sales", f"{result['min_sales']:.2f}")
-            with col3:
-                st.metric("Std Dev", f"{result['std_sales']:.2f}")
-            with col4:
-                st.metric("Data Points", result['data_points'])
-            
-            # Visualization
-            st.markdown("### 📈 Forecast Visualization")
-            chart = create_forecast_chart(
+            # Dual forecast visualization
+            st.markdown("### 📈 Dual Forecast Visualization")
+            dual_chart = create_dual_forecast_chart(
                 result['historical_periods'],
-                result['historical_values'],
-                result['avg_forecast'],
+                result['historical_sales'],
+                result['historical_quantities'],
+                result['sales_avg_forecast'],
+                result['qty_avg_forecast'],
                 result['next_period'],
                 frequency
             )
-            if chart:
-                st.plotly_chart(chart, use_container_width=True)
+            if dual_chart:
+                st.plotly_chart(dual_chart, use_container_width=True)
             
-            # Method comparison
-            st.markdown("### 🔄 Method Comparison")
-            display_method_comparison(result)
+            # Sales and Quantity results side by side
+            col1, col2 = st.columns(2)
             
-            # Individual method forecasts and metrics
+            with col1:
+                st.markdown("### 💰 Sales Forecast Results")
+                subcol1, subcol2 = st.columns(2)
+                with subcol1:
+                    st.metric("Next Period", result['next_period'])
+                    st.metric("Sales Forecast", f"{result['sales_avg_forecast']:.2f}")
+                with subcol2:
+                    st.metric("Avg Historical", f"{result['sales_avg']:.2f}")
+                    st.metric("Trend", f"{result['sales_trend_pct']:.2f}%")
+                
+                subcol1, subcol2, subcol3 = st.columns(3)
+                with subcol1:
+                    st.metric("Max", f"{result['sales_max']:.2f}")
+                with subcol2:
+                    st.metric("Min", f"{result['sales_min']:.2f}")
+                with subcol3:
+                    st.metric("Std Dev", f"{result['sales_std']:.2f}")
+                
+                # Sales method comparison
+                st.markdown("#### 🔄 Sales Methods Comparison")
+                display_method_comparison(result, "sales")
+            
+            with col2:
+                st.markdown("### 📦 Quantity Forecast Results")
+                subcol1, subcol2 = st.columns(2)
+                with subcol1:
+                    st.metric("Next Period", result['next_period'])
+                    st.metric("Qty Forecast", f"{result['qty_avg_forecast']:.2f}")
+                with subcol2:
+                    st.metric("Avg Historical", f"{result['qty_avg']:.2f}")
+                    st.metric("Trend", f"{result['qty_trend_pct']:.2f}%")
+                
+                subcol1, subcol2, subcol3 = st.columns(3)
+                with subcol1:
+                    st.metric("Max", f"{result['qty_max']:.2f}")
+                with subcol2:
+                    st.metric("Min", f"{result['qty_min']:.2f}")
+                with subcol3:
+                    st.metric("Std Dev", f"{result['qty_std']:.2f}")
+                
+                # Quantity method comparison
+                st.markdown("#### 🔄 Quantity Methods Comparison")
+                display_method_comparison(result, "qty")
+            
+            # Detailed method performance
             st.markdown("### 📊 Detailed Method Performance")
+            
+            perf_tab1, perf_tab2 = st.tabs(["💰 Sales Methods", "📦 Quantity Methods"])
             
             methods_info = {
                 'Simple Moving Average': ('sma_forecast', 'sma_metrics'),
@@ -564,132 +714,503 @@ if st.session_state.data_loaded and st.session_state.forecaster:
                 'XGBoost/RF': ('xgb_forecast', 'xgb_metrics')
             }
             
-            for method_name, (forecast_key, metrics_key) in methods_info.items():
-                if forecast_key in result and not pd.isna(result[forecast_key]):
-                    with st.expander(f"📍 {method_name}"):
-                        col1, col2 = st.columns([1, 2])
-                        
-                        with col1:
-                            st.metric("Forecast Value", f"{result[forecast_key]:.2f}")
+            with perf_tab1:
+                for method_name, (forecast_key, metrics_key) in methods_info.items():
+                    full_key = f'sales_{forecast_key}'
+                    full_metrics = f'sales_{metrics_key}'
+                    
+                    if full_key in result and not pd.isna(result[full_key]):
+                        with st.expander(f"📍 {method_name}"):
+                            col1, col2 = st.columns([1, 2])
                             
-                            # Display metrics
-                            if metrics_key in result:
-                                metrics = parse_metrics(result[metrics_key])
-                                if metrics:
-                                    st.markdown("**Performance Metrics:**")
-                                    for metric, value in metrics.items():
-                                        if not pd.isna(value):
-                                            st.write(f"- **{metric}:** {value:.4f}")
-                        
-                        with col2:
-                            # Metrics chart
-                            if metrics_key in result:
-                                metrics = parse_metrics(result[metrics_key])
-                                if metrics:
-                                    chart = create_metrics_chart(metrics, method_name)
-                                    if chart:
-                                        st.plotly_chart(chart, use_container_width=True)
+                            with col1:
+                                st.metric("Forecast Value", f"{result[full_key]:.2f}")
+                                
+                                if full_metrics in result:
+                                    metrics = parse_metrics(result[full_metrics])
+                                    if metrics:
+                                        st.markdown("**Performance Metrics:**")
+                                        for metric, value in metrics.items():
+                                            if not pd.isna(value):
+                                                st.write(f"- **{metric}:** {value:.4f}")
+                            
+                            with col2:
+                                if full_metrics in result:
+                                    metrics = parse_metrics(result[full_metrics])
+                                    if metrics:
+                                        chart = create_metrics_chart(metrics, method_name)
+                                        if chart:
+                                            st.plotly_chart(chart, use_container_width=True)
+            
+            with perf_tab2:
+                for method_name, (forecast_key, metrics_key) in methods_info.items():
+                    full_key = f'qty_{forecast_key}'
+                    full_metrics = f'qty_{metrics_key}'
+                    
+                    if full_key in result and not pd.isna(result[full_key]):
+                        with st.expander(f"📍 {method_name}"):
+                            col1, col2 = st.columns([1, 2])
+                            
+                            with col1:
+                                st.metric("Forecast Value", f"{result[full_key]:.2f}")
+                                
+                                if full_metrics in result:
+                                    metrics = parse_metrics(result[full_metrics])
+                                    if metrics:
+                                        st.markdown("**Performance Metrics:**")
+                                        for metric, value in metrics.items():
+                                            if not pd.isna(value):
+                                                st.write(f"- **{metric}:** {value:.4f}")
+                            
+                            with col2:
+                                if full_metrics in result:
+                                    metrics = parse_metrics(result[full_metrics])
+                                    if metrics:
+                                        chart = create_metrics_chart(metrics, method_name)
+                                        if chart:
+                                            st.plotly_chart(chart, use_container_width=True)
     
     with tab3:
-        st.header("Summary Statistics")
-        
-        if st.session_state.forecast_results is not None:
-            results_df = st.session_state.forecast_results
-            
-            # Overall statistics
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("### 📊 Forecast Distribution")
-                fig = px.histogram(
-                    results_df,
-                    x='avg_forecast',
-                    nbins=50,
-                    title='Distribution of Forecasts'
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.markdown("### 📈 Trend Distribution")
-                fig = px.histogram(
-                    results_df,
-                    x='trend_pct',
-                    nbins=50,
-                    title='Distribution of Trends (%)'
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Top performers
-            st.markdown("### 🏆 Top 10 Articles by Forecast")
-            top10 = results_df.nlargest(10, 'avg_forecast')
-            fig = px.bar(
-                top10,
-                x='ref_article',
-                y='avg_forecast',
-                title='Top 10 Articles by Forecast Value',
-                color='avg_forecast',
-                color_continuous_scale='Blues'
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Brand/Family analysis
-            if 'marque' in results_df.columns:
-                st.markdown("### 🏷️ Analysis by Brand")
-                brand_agg = results_df.groupby('marque')['avg_forecast'].agg(['sum', 'mean', 'count']).reset_index()
-                brand_agg.columns = ['Brand', 'Total Forecast', 'Avg Forecast', 'Article Count']
-                st.dataframe(brand_agg, use_container_width=True)
-        else:
-            st.info("👆 Run 'Forecast All' first to see summary statistics")
-    
-    with tab4:
-        st.header("Data Preview")
+        st.header("📊 Summary Statistics")
         
         forecaster = st.session_state.forecaster
         
-        # Raw data
-        with st.expander("📄 Raw Data Sample", expanded=True):
-            st.dataframe(forecaster.df_raw.head(100), use_container_width=True)
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("📈 Generate Summary", type="primary", use_container_width=True):
+                with st.spinner("Generating summary..."):
+                    summary_df = forecaster.generate_summary(force_recompute=force_recompute)
+                    st.session_state.summary_results = summary_df
+                    st.success("✅ Summary generated!")
         
-        # Clean data
-        if forecaster.df_clean is not None:
-            with st.expander("🧹 Clean Data Sample"):
-                st.dataframe(forecaster.df_clean.head(100), use_container_width=True)
+        # Check if we have summary results
+        if 'summary_results' in st.session_state and st.session_state.summary_results is not None:
+            summary_df = st.session_state.summary_results
+        elif st.session_state.forecast_results is not None:
+            summary_df = st.session_state.forecast_results
+        else:
+            summary_df = None
         
-        # Grouped data
-        if forecaster.grouped_data is not None:
-            with st.expander("📊 Grouped Data Sample"):
-                st.dataframe(forecaster.grouped_data.head(100), use_container_width=True)
-
+        if summary_df is not None and not summary_df.empty:
+            st.markdown("### 📈 Overall Statistics")
+            
+            # Overall metrics in two rows
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Articles", len(summary_df))
+            with col2:
+                st.metric("Total Sales Forecast", f"{summary_df['sales_avg_forecast'].sum():.2f}")
+            with col3:
+                st.metric("Total Qty Forecast", f"{summary_df['qty_avg_forecast'].sum():.0f}")
+            with col4:
+                st.metric("Avg Data Points", f"{summary_df['data_points'].mean():.1f}")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Avg Sales per Article", f"{summary_df['sales_avg_forecast'].mean():.2f}")
+            with col2:
+                st.metric("Avg Qty per Article", f"{summary_df['qty_avg_forecast'].mean():.2f}")
+            with col3:
+                st.metric("Max Sales Forecast", f"{summary_df['sales_avg_forecast'].max():.2f}")
+            with col4:
+                st.metric("Max Qty Forecast", f"{summary_df['qty_avg_forecast'].max():.0f}")
+            
+            st.markdown("---")
+            
+            # Visualization tabs
+            viz_tab1, viz_tab2, viz_tab3, viz_tab4 = st.tabs([
+                "📊 Top Articles", 
+                "📈 Distribution Analysis", 
+                "🏷️ Category Analysis", 
+                "📉 Trend Analysis"
+            ])
+            
+            with viz_tab1:
+                st.markdown("### 🏆 Top Articles by Forecast")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### 💰 Top 10 by Sales")
+                    top_sales = summary_df.nlargest(10, 'sales_avg_forecast')[
+                        ['ref_article', 'designation', 'sales_avg_forecast', 'sales_trend_pct']
+                    ]
+                    
+                    fig = px.bar(
+                        top_sales,
+                        x='sales_avg_forecast',
+                        y='ref_article',
+                        orientation='h',
+                        title='Top 10 Articles by Sales Forecast',
+                        labels={'sales_avg_forecast': 'Sales Forecast', 'ref_article': 'Article'},
+                        color='sales_trend_pct',
+                        color_continuous_scale='RdYlGn'
+                    )
+                    fig.update_layout(height=400, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.dataframe(top_sales, use_container_width=True, height=250)
+                
+                with col2:
+                    st.markdown("#### 📦 Top 10 by Quantity")
+                    top_qty = summary_df.nlargest(10, 'qty_avg_forecast')[
+                        ['ref_article', 'designation', 'qty_avg_forecast', 'qty_trend_pct']
+                    ]
+                    
+                    fig = px.bar(
+                        top_qty,
+                        x='qty_avg_forecast',
+                        y='ref_article',
+                        orientation='h',
+                        title='Top 10 Articles by Quantity Forecast',
+                        labels={'qty_avg_forecast': 'Quantity Forecast', 'ref_article': 'Article'},
+                        color='qty_trend_pct',
+                        color_continuous_scale='RdYlGn'
+                    )
+                    fig.update_layout(height=400, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.dataframe(top_qty, use_container_width=True, height=250)
+            
+            with viz_tab2:
+                st.markdown("### 📊 Distribution Analysis")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### 💰 Sales Forecast Distribution")
+                    fig = px.histogram(
+                        summary_df,
+                        x='sales_avg_forecast',
+                        nbins=50,
+                        title='Sales Forecast Distribution',
+                        labels={'sales_avg_forecast': 'Sales Forecast'},
+                        color_discrete_sequence=['#1f77b4']
+                    )
+                    fig.update_layout(height=400, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Box plot
+                    fig = px.box(
+                        summary_df,
+                        y='sales_avg_forecast',
+                        title='Sales Forecast Box Plot',
+                        labels={'sales_avg_forecast': 'Sales Forecast'}
+                    )
+                    fig.update_layout(height=300, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    st.markdown("#### 📦 Quantity Forecast Distribution")
+                    fig = px.histogram(
+                        summary_df,
+                        x='qty_avg_forecast',
+                        nbins=50,
+                        title='Quantity Forecast Distribution',
+                        labels={'qty_avg_forecast': 'Quantity Forecast'},
+                        color_discrete_sequence=['#2ca02c']
+                    )
+                    fig.update_layout(height=400, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Box plot
+                    fig = px.box(
+                        summary_df,
+                        y='qty_avg_forecast',
+                        title='Quantity Forecast Box Plot',
+                        labels={'qty_avg_forecast': 'Quantity Forecast'}
+                    )
+                    fig.update_layout(height=300, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Scatter plot: Sales vs Quantity
+                st.markdown("#### 🔗 Sales vs Quantity Correlation")
+                fig = px.scatter(
+                    summary_df,
+                    x='sales_avg_forecast',
+                    y='qty_avg_forecast',
+                    title='Sales vs Quantity Forecast',
+                    labels={
+                        'sales_avg_forecast': 'Sales Forecast',
+                        'qty_avg_forecast': 'Quantity Forecast'
+                    },
+                    hover_data=['ref_article', 'designation'],
+                    trendline='ols'
+                )
+                fig.update_layout(height=500, template='plotly_white')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with viz_tab3:
+                st.markdown("### 🏷️ Category Analysis")
+                
+                # By Brand (Marque)
+                if 'marque' in summary_df.columns:
+                    st.markdown("#### 📱 Analysis by Brand")
+                    
+                    brand_summary = summary_df.groupby('marque').agg({
+                        'sales_avg_forecast': ['sum', 'mean', 'count'],
+                        'qty_avg_forecast': ['sum', 'mean']
+                    }).reset_index()
+                    brand_summary.columns = ['Brand', 'Total Sales', 'Avg Sales', 'Count', 'Total Qty', 'Avg Qty']
+                    brand_summary = brand_summary.sort_values('Total Sales', ascending=False)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig = px.bar(
+                            brand_summary.head(15),
+                            x='Brand',
+                            y='Total Sales',
+                            title='Total Sales Forecast by Brand (Top 15)',
+                            color='Total Sales',
+                            color_continuous_scale='Blues'
+                        )
+                        fig.update_layout(height=400, template='plotly_white', xaxis_tickangle=-45)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        fig = px.bar(
+                            brand_summary.head(15),
+                            x='Brand',
+                            y='Total Qty',
+                            title='Total Quantity Forecast by Brand (Top 15)',
+                            color='Total Qty',
+                            color_continuous_scale='Greens'
+                        )
+                        fig.update_layout(height=400, template='plotly_white', xaxis_tickangle=-45)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.dataframe(brand_summary.head(20), use_container_width=True, height=300)
+                
+                # By Family (Famille)
+                if 'famille' in summary_df.columns:
+                    st.markdown("#### 📂 Analysis by Family")
+                    
+                    family_summary = summary_df.groupby('famille').agg({
+                        'sales_avg_forecast': ['sum', 'mean', 'count'],
+                        'qty_avg_forecast': ['sum', 'mean']
+                    }).reset_index()
+                    family_summary.columns = ['Family', 'Total Sales', 'Avg Sales', 'Count', 'Total Qty', 'Avg Qty']
+                    family_summary = family_summary.sort_values('Total Sales', ascending=False)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig = px.pie(
+                            family_summary.head(10),
+                            values='Total Sales',
+                            names='Family',
+                            title='Sales Distribution by Family (Top 10)'
+                        )
+                        fig.update_layout(height=400, template='plotly_white')
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        fig = px.pie(
+                            family_summary.head(10),
+                            values='Total Qty',
+                            names='Family',
+                            title='Quantity Distribution by Family (Top 10)'
+                        )
+                        fig.update_layout(height=400, template='plotly_white')
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.dataframe(family_summary.head(20), use_container_width=True, height=300)
+            
+            with viz_tab4:
+                st.markdown("### 📉 Trend Analysis")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### 💰 Sales Trend Distribution")
+                    
+                    # Categorize trends
+                    summary_df['sales_trend_category'] = pd.cut(
+                        summary_df['sales_trend_pct'],
+                        bins=[-float('inf'), -10, -5, 5, 10, float('inf')],
+                        labels=['Strong Decline', 'Decline', 'Stable', 'Growth', 'Strong Growth']
+                    )
+                    
+                    trend_counts = summary_df['sales_trend_category'].value_counts()
+                    
+                    fig = px.pie(
+                        values=trend_counts.values,
+                        names=trend_counts.index,
+                        title='Sales Trend Categories',
+                        color_discrete_sequence=['#d73027', '#fc8d59', '#fee08b', '#d9ef8b', '#91cf60']
+                    )
+                    fig.update_layout(height=400, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Histogram
+                    fig = px.histogram(
+                        summary_df,
+                        x='sales_trend_pct',
+                        nbins=50,
+                        title='Sales Trend % Distribution',
+                        labels={'sales_trend_pct': 'Trend %'},
+                        color_discrete_sequence=['#1f77b4']
+                    )
+                    fig.update_layout(height=300, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    st.markdown("#### 📦 Quantity Trend Distribution")
+                    
+                    # Categorize trends
+                    summary_df['qty_trend_category'] = pd.cut(
+                        summary_df['qty_trend_pct'],
+                        bins=[-float('inf'), -10, -5, 5, 10, float('inf')],
+                        labels=['Strong Decline', 'Decline', 'Stable', 'Growth', 'Strong Growth']
+                    )
+                    
+                    trend_counts = summary_df['qty_trend_category'].value_counts()
+                    
+                    fig = px.pie(
+                        values=trend_counts.values,
+                        names=trend_counts.index,
+                        title='Quantity Trend Categories',
+                        color_discrete_sequence=['#d73027', '#fc8d59', '#fee08b', '#d9ef8b', '#91cf60']
+                    )
+                    fig.update_layout(height=400, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Histogram
+                    fig = px.histogram(
+                        summary_df,
+                        x='qty_trend_pct',
+                        nbins=50,
+                        title='Quantity Trend % Distribution',
+                        labels={'qty_trend_pct': 'Trend %'},
+                        color_discrete_sequence=['#2ca02c']
+                    )
+                    fig.update_layout(height=300, template='plotly_white')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Articles with highest growth
+                st.markdown("#### 🚀 Fastest Growing Articles")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**By Sales Growth**")
+                    top_growth_sales = summary_df.nlargest(10, 'sales_trend_pct')[
+                        ['ref_article', 'designation', 'sales_avg_forecast', 'sales_trend_pct']
+                    ]
+                    st.dataframe(top_growth_sales, use_container_width=True, height=300)
+                
+                with col2:
+                    st.markdown("**By Quantity Growth**")
+                    top_growth_qty = summary_df.nlargest(10, 'qty_trend_pct')[
+                        ['ref_article', 'designation', 'qty_avg_forecast', 'qty_trend_pct']
+                    ]
+                    st.dataframe(top_growth_qty, use_container_width=True, height=300)
+        else:
+            st.info("📊 No summary data available. Please run forecasts first or generate summary.")
+    
+    with tab4:
+        st.header("📋 Data Preview")
+        
+        forecaster = st.session_state.forecaster
+        
+        preview_option = st.radio(
+            "Select Data to Preview",
+            options=["Raw Data", "Cleaned Data", "Grouped Data"],
+            horizontal=True
+        )
+        
+        if preview_option == "Raw Data":
+            st.markdown("### 📄 Raw Data")
+            if forecaster.df_raw is not None:
+                st.markdown(f"**Total Rows:** {len(forecaster.df_raw)}")
+                st.markdown(f"**Columns:** {', '.join(forecaster.df_raw.columns.tolist())}")
+                st.dataframe(forecaster.df_raw.head(100), use_container_width=True, height=500)
+                
+                # Download option
+                csv = forecaster.df_raw.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Raw Data",
+                    data=csv,
+                    file_name=f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        elif preview_option == "Cleaned Data":
+            st.markdown("### 🧹 Cleaned Data")
+            if forecaster.df_clean is None:
+                forecaster.clean_data()
+            
+            if forecaster.df_clean is not None:
+                st.markdown(f"**Total Rows:** {len(forecaster.df_clean)}")
+                st.markdown(f"**Columns:** {', '.join(forecaster.df_clean.columns.tolist())}")
+                st.dataframe(forecaster.df_clean.head(100), use_container_width=True, height=500)
+                
+                # Download option
+                csv = forecaster.df_clean.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Cleaned Data",
+                    data=csv,
+                    file_name=f"cleaned_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        else:  # Grouped Data
+            st.markdown("### 📊 Grouped Data")
+            if forecaster.grouped_data is None:
+                forecaster.prepare_data()
+            
+            if forecaster.grouped_data is not None:
+                st.markdown(f"**Total Rows:** {len(forecaster.grouped_data)}")
+                st.markdown(f"**Unique Articles:** {forecaster.grouped_data['Ref Article'].nunique()}")
+                st.markdown(f"**Columns:** {', '.join(forecaster.grouped_data.columns.tolist())}")
+                st.dataframe(forecaster.grouped_data.head(100), use_container_width=True, height=500)
+                
+                # Download option
+                csv = forecaster.grouped_data.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Grouped Data",
+                    data=csv,
+                    file_name=f"grouped_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
 else:
     # Welcome screen
     st.markdown("""
-    <div class="info-box">
-        <h2>👋 Welcome to the Sales Forecasting Dashboard!</h2>
-        <p>This application helps you forecast sales using multiple advanced methods.</p>
-        <h3>🚀 Getting Started:</h3>
-        <ol>
-            <li>Upload your sales data (CSV or Excel) using the sidebar</li>
-            <li>Choose your forecasting frequency (yearly or monthly)</li>
-            <li>Configure advanced settings if needed</li>
-            <li>Click "Load/Reload Data" to initialize</li>
-            <li>Start forecasting!</li>
-        </ol>
-        <h3>📋 Required Data Format:</h3>
-        <ul>
-            <li><strong>Ref Article:</strong> Article reference/ID</li>
-            <li><strong>Année/Date:</strong> Year (for yearly) or Date (for monthly)</li>
-            <li><strong>CA HT NET:</strong> Net sales amount</li>
-            <li><strong>Optional:</strong> Designation, Marque, Famille, Sous Famille</li>
-        </ul>
-        <h3>🎯 Features:</h3>
-        <ul>
-            <li>Multiple forecasting methods (SMA, Exponential Smoothing, Linear Regression, ARIMA, Prophet, XGBoost)</li>
-            <li>Detailed performance metrics (MAE, MSE, RMSE, MAPE, R²)</li>
-            <li>Interactive visualizations</li>
-            <li>Ensemble forecasting</li>
-            <li>Cache management for faster processing</li>
-            <li>Export results to CSV</li>
-        </ul>
+    <div style="text-align: center; padding: 3rem;">
+        <h2>👋 Welcome to the Sales & Quantity Forecasting Dashboard</h2>
+        <p style="font-size: 1.2rem; color: #666;">
+            Upload your sales data to get started with advanced dual forecasting
+        </p>
     </div>
     """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("""
+        ### 📋 How to Use:
+        
+        1. **Upload Data**: Use the sidebar to upload your CSV or Excel file
+        2. **Configure**: Select frequency (yearly/monthly) and advanced settings
+        3. **Forecast**: Run forecasts for all articles or individual items
+        4. **Analyze**: Explore comprehensive statistics and visualizations
+        5. **Export**: Download results for further analysis
+        
+        ### ✨ Features:
+        
+        - 💰 **Dual Forecasting**: Simultaneous Sales & Quantity predictions
+        - 📊 **6 Methods**: SMA, Exponential Smoothing, Linear Regression, ARIMA, Prophet, XGBoost
+        - 📈 **Detailed Metrics**: MAE, MSE, RMSE, MAPE, R² for each method
+        - 🎯 **Smart Caching**: Fast performance with intelligent result caching
+        - 📉 **Rich Visualizations**: Interactive charts and comprehensive analytics
+        - 🔍 **Flexible Filtering**: By brand, family, forecast values, and more
+        
+        ### 📊 Required Data Columns:
+        
+        - `Ref Article`: Article reference/ID
+        - `CA HT NET`: Sales amount
+        - `Qté Vendu`: Quantity sold
+        - `Année` or `Date`: Time period (depending on frequency)
+        - Optional: `Marque`, `Famille`, `Designation` for categorization
+        """)
 
+# Footer

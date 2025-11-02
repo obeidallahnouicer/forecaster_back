@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from .agent import QueryAgent
+from .agent import Chat2DBQueryAgent
 from .logger import logger
 
 app = FastAPI(title="Text2SQL Service")
@@ -14,7 +14,7 @@ class QueryIn(BaseModel):
 @app.post("/query")
 async def query_endpoint(payload: QueryIn):
     try:
-        agent = QueryAgent(db_url=payload.db_url)
+        agent = Chat2DBQueryAgent(db_url=payload.db_url)
         result = agent.generate_and_run(payload.question)
         return result
     except Exception as exc:

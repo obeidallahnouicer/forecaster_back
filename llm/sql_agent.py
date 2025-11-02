@@ -13,15 +13,15 @@ New behavior:
      (basic validation). If validation fails, the function returns a helpful
      explanation and preserves the raw LLM output in `raw`/`meta` for debugging.
 """
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 import json
 import os
+import logging
+
 import numpy as np
 
 from prompts import sql_generation as sg
 from llm.client import get_llm_response
-from typing import Tuple
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -105,27 +105,27 @@ def generate_sql_from_question(
       - raw: raw LLM content
       - meta: the raw get_llm_response return value for debugging
     """
-    # Prefer the new text2sql QueryAgent for SQL generation (Chat2DB backend).
+    # Prefer the new text2sql Chat2DBQueryAgent for SQL generation (Chat2DB backend).
     # This enforces using Chat2DB/Chat2DB-SQL-7B (or the configured local model)
     # for producing SQL while leaving the generic LLM client available for
     # non-SQL insights.
     try:
-        from text2sql.agent import QueryAgent as Text2SQLAgent
+        from text2sql.agent import Chat2DBQueryAgent
 
-        agent = Text2SQLAgent()
+        agent = Chat2DBQueryAgent()
         # generate_and_run returns a dict with keys 'sql' and 'rows'
         res = agent.generate_and_run(question)
         sql_text = res.get("sql") or ""
         # Provide a normalized response shape similar to the old adapter
         return {
-            "reasoning": "SQL generated via text2sql QueryAgent (Chat2DB)",
+            "reasoning": "SQL generated via text2sql Chat2DBQueryAgent (Chat2DB)",
             "sql_query": sql_text,
             "params": {},
             "raw": sql_text,
             "meta": {"method": "text2sql"},
         }
     except Exception:
-        logger.debug("text2sql QueryAgent not available or failed; falling back to legacy RAG/prompt flow")
+        logger.debug("text2sql Chat2DBQueryAgent not available or failed; falling back to legacy RAG/prompt flow")
 
     # Fallback: original prompt-based generation
     prompt = sg.build_sql_generation_prompt(question, sample_rows, stock_columns)

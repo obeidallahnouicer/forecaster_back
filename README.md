@@ -1,38 +1,34 @@
-# Sales Forecaster & Business Intelligence API# Sales Forecaster & Business Intelligence API - LangChain + Guardrails Edition
+# Sales Forecaster & Business Intelligence API - LangChain + Guardrails Edition
 
+**Version 6.0.0** - Enhanced Dual Forecasting with IntegratedForecaster
 
+## 🎯 Overview
 
-**Version 5.0.0** - Strict Validation Pipeline with LangChain + Guardrails AI**Version 4.0.0** - Production-ready with LangChain orchestration and Guardrails AI safety
+Production-ready FastAPI backend featuring a **SQL chatbot with strict validation** and **enhanced dual sales & quantity forecasting**.
 
+**Core Capabilities**:
 
-
-## 🎯 Overview## 🎯 Overview
-
-
-
-Production-ready FastAPI backend featuring a **SQL chatbot with strict validation** and **sales forecasting**.A FastAPI-based business intelligence system with two core capabilities:
-
-
-
-**Core Capabilities**:1. **Text-to-SQL Chatbot** - Natural language to SQL using LangChain chains with Guardrails AI safety
-
-1. **SQL Chatbot** - Natural language → Validated SQL → Insights (LangChain + Guardrails AI)2. **Sales Forecasting** - Upload sales data, generate forecasts with multiple ML models
-
-2. **Sales Forecasting** - Time series predictions with Prophet
-
-**Architecture**: LangChain + Groq (LLaMA 3.3 70B) + Guardrails AI for safety
+1. **SQL Chatbot** - Natural language → Validated SQL → Insights (LangChain + Guardrails AI)
+2. **Dual Forecasting** - Simultaneous Sales AND Quantity forecasting with IntegratedForecaster using multiple ML models (Prophet, ARIMA, XGBoost, Linear Regression, Exponential Smoothing, SMA)
 
 **Technology Stack**:
 
-- **LangChain**: Orchestration and prompt management**Key Features**:
+- **LangChain**: Orchestration and prompt management
+- **Groq**: Llama 3.3 70B inference (fast, scalable)
+- **Guardrails AI**: Input/output validation for safety
+- **FastAPI**: High-performance API framework
+- **IntegratedForecaster**: Dual forecasting engine for sales and quantities
 
-- **Groq**: Llama 3.3 70B inference (fast, scalable)- 🔗 **LangChain Integration**: Modular prompt templates and composable chains
+**Key Features**:
 
-- **Guardrails AI**: Input/output validation for safety- 🛡️ **Guardrails AI**: SQL injection prevention, PII detection/masking, syntax validation
-
-- **FastAPI**: High-performance API framework- 🚀 **Groq LLM**: Fast inference with LLaMA 3.3 70B
-
+- 🔗 **LangChain Integration**: Modular prompt templates and composable chains
+- 🛡️ **Guardrails AI**: SQL injection prevention, PII detection/masking, syntax validation
+- 🚀 **Groq LLM**: Fast inference with LLaMA 3.3 70B
 - 📊 **Data-Driven**: Direct SQL on structured data (no RAG overhead)
+- 📈 **Dual Forecasting**: Simultaneous forecasting of both Sales (CA HT NET) and Quantities (Qté Vendu)
+- 🎯 **Multiple Models**: ARIMA, Prophet, XGBoost, Linear Regression, Exponential Smoothing, Simple Moving Average
+- ⚡ **Monthly & Yearly**: Flexible frequency support for different time granularities
+- 📉 **Detailed Metrics**: MAE, MSE, RMSE, MAPE, R² for each forecasting method
 
 ---
 
@@ -130,7 +126,7 @@ High-level components:
 - Core: configuration, DB connection helpers (in-memory SQLite), table/schema helpers.
 - Cache: local file-based cache managers to store forecasts, uploads, and summary results.
 - LLM: lightweight adapter to call Groq (Llama 3.3 70B) or fallback behavior for unconfigured LLM keys.
-- Streamlit dashboard: `streamlit_app.py` uses `SalesForecaster` to load data and show forecasts.
+- Streamlit dashboard: `streamlit_app.py` uses `IntegratedForecaster` (alias: `SalesForecaster`) to load data and show forecasts for both sales and quantities.
 
 Flow for Text-to-SQL:
 
@@ -144,7 +140,7 @@ Flow for Text-to-SQL:
 Flow for forecasting (Streamlit / API):
 
 1. User uploads dataset (CSV/Excel) or uses preloaded CSVs in repo.
-2. `SalesForecaster` normalizes columns and prepares data (yearly/monthly aggregation).
+2. `IntegratedForecaster` normalizes columns and prepares data (yearly/monthly aggregation), forecasting both sales and quantities.
 3. Per-article forecasts are computed using several methods and cached per article.
 4. Aggregate summary forecasts are saved to a summary cache (parquet) for fast retrieval.
 

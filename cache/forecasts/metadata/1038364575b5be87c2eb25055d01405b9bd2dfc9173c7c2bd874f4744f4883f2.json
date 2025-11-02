@@ -1,18 +1,18 @@
 {
   "key": "forecast:summary:c6f990ea",
-  "created_at": 1761954103.064262,
-  "updated_at": 1761954103.064262,
-  "expires_at": 1762040503.064262,
+  "created_at": 1762102874.6276727,
+  "updated_at": 1762102874.6276727,
+  "expires_at": 1762189274.6276727,
   "version": "v1",
   "status": "completed",
-  "size_bytes": 178479,
-  "hit_count": 0,
-  "last_accessed": null,
+  "size_bytes": 309415,
+  "hit_count": 7,
+  "last_accessed": 1762107715.9198124,
   "tags": {
     "frequency": "yearly",
     "type": "summary",
-    "count": 632,
+    "count": 640,
     "fingerprint": "8b4254c33f1351bf"
   },
-  "checksum": "d3084db0b6e97ce609d2eb31dd901163"
+  "checksum": "9632fe134237177aebbde686a9a80158"
 }

@@ -5,7 +5,7 @@ Example:
     python -m text2sql.cli --file queries.txt --db sqlite:///./data.db
 """
 import argparse
-from .agent import QueryAgent
+from .agent import Chat2DBQueryAgent
 from .logger import logger
 
 
@@ -17,7 +17,7 @@ def main():
     g.add_argument("--file", help="File with one query per line")
     args = p.parse_args()
 
-    agent = QueryAgent(db_url=args.db)
+    agent = Chat2DBQueryAgent(db_url=args.db)
 
     queries = []
     if args.query:

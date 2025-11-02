@@ -8,12 +8,15 @@ from .logger import logger
 from .config import settings
 
 
-class QueryAgent:
-    """Orchestrates text->SQL generation, validation, and execution.
+class Chat2DBQueryAgent:
+    """Orchestrates text->SQL generation, validation, and execution using Chat2DB model.
+
+    This agent uses the Chat2DB-SQL-7B model (or mock) for text-to-SQL conversion.
+    It handles schema loading, prompt building, SQL generation, validation, and execution.
 
     Usage:
-        agent = QueryAgent(db_url)
-        results = agent.answer(question)
+        agent = Chat2DBQueryAgent(db_url)
+        results = agent.generate_and_run(question)
     """
 
     def __init__(self, db_url: str | None = None, model_loader: ModelLoader | None = None):

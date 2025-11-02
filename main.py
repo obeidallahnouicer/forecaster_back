@@ -177,6 +177,9 @@ def create_app() -> FastAPI:
     app.include_router(forecasts.router, prefix="/api/forecasts", tags=["Forecasts"])
     app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
     
+    # Backwards-compatible alias for summary endpoints (old frontend calls /api/summary/...)
+    app.include_router(forecasts.router, prefix="/api", tags=["Forecasts Alias"])
+    
     # Health check endpoint
     @app.get("/health", tags=["System"])
     async def health_check():
